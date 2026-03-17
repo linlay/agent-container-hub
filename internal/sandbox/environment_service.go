@@ -1,0 +1,128 @@
+package sandbox
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"agentbox/internal/api"
+	"agentbox/internal/model"
+	"agentbox/internal/store"
+)
+
+type EnvironmentService struct {
+	store  store.Store
+	logger *slog.Logger
+}
+
+func NewEnvironmentService(st store.Store, logger *slog.Logger) *EnvironmentService {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &EnvironmentService{store: st, logger: logger}
+}
+
+func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironmentRequest) (*api.EnvironmentResponse, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, fmt.Errorf("%w: name is required", ErrValidation)
+	}
+	if strings.TrimSpace(req.ImageRepository) == "" {
+		return nil, fmt.Errorf("%w: image_repository is required", ErrValidation)
+	}
+	if strings.TrimSpace(req.ImageTag) == "" {
+		return nil, fmt.Errorf("%w: image_tag is required", ErrValidation)
+	}
+	if strings.TrimSpace(req.Build.Dockerfile) == "" {
+		return nil, fmt.Errorf("%w: build.dockerfile is required", ErrValidation)
+	}
+
+	now := time.Now().UTC()
+	environment := &model.Environment{
+		Name:            name,
+		Description:     strings.TrimSpace(req.Description),
+		ImageRepository: strings.TrimSpace(req.ImageRepository),
+		ImageTag:        strings.TrimSpace(req.ImageTag),
+		DefaultCwd:      sessionDefaultCwd(req.DefaultCwd),
+		DefaultEnv:      cloneMap(req.DefaultEnv),
+		Mounts:          append([]model.Mount(nil), req.Mounts...),
+		Resources:       req.Resources,
+		Enabled:         req.Enabled,
+		Build:           req.Build.Clone(),
+		UpdatedAt:       now,
+	}
+
+	existing, err := s.store.GetEnvironment(ctx, name)
+	switch {
+	case err == nil:
+		environment.CreatedAt = existing.CreatedAt
+	case err == store.ErrNotFound:
+		environment.CreatedAt = now
+	default:
+		return nil, err
+	}
+
+	if err := s.store.SaveEnvironment(ctx, environment); err != nil {
+		return nil, err
+	}
+	s.logger.Info("environment upserted", "environment", environment.Name, "image", environment.ImageRef())
+	return s.toResponse(ctx, environment)
+}
+
+func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.EnvironmentResponse, error) {
+	environment, err := s.store.GetEnvironment(ctx, strings.TrimSpace(name))
+	if err != nil {
+		return nil, err
+	}
+	return s.toResponse(ctx, environment)
+}
+
+func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentResponse, error) {
+	environments, err := s.store.ListEnvironments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]*api.EnvironmentResponse, 0, len(environments))
+	for _, environment := range environments {
+		response, err := s.toResponse(ctx, environment)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, response)
+	}
+	return responses, nil
+}
+
+func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.Environment) (*api.EnvironmentResponse, error) {
+	response := &api.EnvironmentResponse{
+		Name:            environment.Name,
+		Description:     environment.Description,
+		ImageRepository: environment.ImageRepository,
+		ImageTag:        environment.ImageTag,
+		ImageRef:        environment.ImageRef(),
+		DefaultCwd:      environment.DefaultCwd,
+		DefaultEnv:      cloneMap(environment.DefaultEnv),
+		Mounts:          append([]model.Mount(nil), environment.Mounts...),
+		Resources:       environment.Resources,
+		Enabled:         environment.Enabled,
+		Build:           environment.Build.Clone(),
+		CreatedAt:       environment.CreatedAt,
+		UpdatedAt:       environment.UpdatedAt,
+	}
+	jobs, err := s.store.ListBuildJobs(ctx, environment.Name)
+	if err != nil {
+		return nil, err
+	}
+	if len(jobs) > 0 {
+		latest := jobs[0]
+		for _, job := range jobs[1:] {
+			if job.StartedAt.After(latest.StartedAt) {
+				latest = job
+			}
+		}
+		response.LastBuild = buildJobToResponse(latest)
+	}
+	return response, nil
+}

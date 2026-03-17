@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Agentbox Console</title>
+  <style>
+    :root { --bg:#f6f1e7; --panel:#fffaf0; --ink:#1c252a; --muted:#657076; --accent:#0b6e6e; --accent2:#c45a2f; --line:rgba(28,37,42,.12); }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Avenir Next", "Segoe UI", sans-serif; color:var(--ink); background:
+      radial-gradient(circle at top right, rgba(11,110,110,.08), transparent 28%),
+      radial-gradient(circle at left, rgba(196,90,47,.08), transparent 30%),
+      var(--bg); }
+    header { padding:24px; display:flex; justify-content:space-between; align-items:center; gap:16px; }
+    h1 { margin:0; font-size:28px; letter-spacing:.04em; text-transform:uppercase; }
+    button { border:none; padding:10px 14px; cursor:pointer; background:var(--accent); color:#fff; font:inherit; }
+    button.secondary { background:#fff; color:var(--ink); border:1px solid var(--line); }
+    main { display:grid; grid-template-columns:1.05fr .95fr; gap:20px; padding:0 24px 24px; }
+    section { background:var(--panel); border:1px solid var(--line); padding:20px; min-height:240px; box-shadow:0 14px 34px rgba(28,37,42,.06); }
+    h2 { margin:0 0 12px; font-size:18px; }
+    .stack { display:grid; gap:12px; }
+    .card { border:1px solid var(--line); padding:12px; background:#fff; }
+    label { display:grid; gap:6px; font-size:13px; color:var(--muted); }
+    input, textarea { width:100%; padding:10px 12px; font:inherit; border:1px solid var(--line); background:#fff; }
+    textarea { min-height:120px; resize:vertical; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    pre { background:#1c252a; color:#e9eee8; padding:12px; overflow:auto; font-size:12px; }
+    .meta { color:var(--muted); font-size:13px; }
+    @media (max-width: 900px) { main { grid-template-columns:1fr; } .row { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Agentbox Console</h1>
+      <div class="meta">Manage registered environments, build images, and inspect sandbox sessions.</div>
+    </div>
+    <button class="secondary" id="logout">Sign out</button>
+  </header>
+  <main>
+    <section>
+      <h2>Environments</h2>
+      <div class="stack" id="environment-list"></div>
+    </section>
+    <section>
+      <h2>Environment Editor</h2>
+      <div class="stack">
+        <div class="row">
+          <label>Name<input id="name" placeholder="python-main"></label>
+          <label>Image repository<input id="repository" placeholder="registry.example.com/agentbox/python"></label>
+        </div>
+        <div class="row">
+          <label>Image tag<input id="tag" placeholder="3.11-v1"></label>
+          <label>Default cwd<input id="cwd" value="/workspace"></label>
+        </div>
+        <label>Description<textarea id="description"></textarea></label>
+        <label>Dockerfile<textarea id="dockerfile">FROM busybox:latest
+CMD ["/bin/sh"]</textarea></label>
+        <div class="row">
+          <button id="save">Save environment</button>
+          <button id="build">Build image</button>
+        </div>
+        <pre id="output">Select or create an environment to begin.</pre>
+      </div>
+    </section>
+    <section>
+      <h2>Sessions</h2>
+      <div class="stack" id="session-list"></div>
+    </section>
+    <section>
+      <h2>Create Session</h2>
+      <div class="stack">
+        <label>Environment<input id="create-environment" placeholder="python-main"></label>
+        <label>Session ID<input id="create-session-id" placeholder="optional-session-id"></label>
+        <button id="create-session">Create session</button>
+        <pre id="session-output">No session created yet.</pre>
+      </div>
+    </section>
+  </main>
+  <script>
+    const output = document.getElementById("output");
+    const sessionOutput = document.getElementById("session-output");
+    const environmentList = document.getElementById("environment-list");
+    const sessionList = document.getElementById("session-list");
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+      if (response.status === 401) {
+        window.location.href = "/login";
+        throw new Error("unauthorized");
+      }
+      const text = await response.text();
+      return { ok: response.ok, status: response.status, data: text ? JSON.parse(text) : null };
+    }
+
+    async function refresh() {
+      const [envs, sessions] = await Promise.all([api("/api/environments"), api("/api/sessions")]);
+      renderEnvironments(envs.data || []);
+      renderSessions(sessions.data || []);
+    }
+
+    function renderEnvironments(items) {
+      environmentList.innerHTML = items.map((item) => `
+        <div class="card">
+          <strong>${item.name}</strong>
+          <div class="meta">${item.image_ref}</div>
+          <div class="meta">enabled: ${item.enabled}</div>
+          <button onclick='selectEnvironment(${JSON.stringify(JSON.stringify(item))})'>Edit</button>
+        </div>
+      `).join("") || "<div class='meta'>No environments yet.</div>";
+    }
+
+    function renderSessions(items) {
+      sessionList.innerHTML = items.map((item) => `
+        <div class="card">
+          <strong>${item.session_id}</strong>
+          <div class="meta">${item.environment_name} · ${item.status}</div>
+          <div class="meta">${item.image}</div>
+          <button onclick='stopSession("${item.session_id}")'>Stop</button>
+        </div>
+      `).join("") || "<div class='meta'>No active sessions.</div>";
+    }
+
+    window.selectEnvironment = function (raw) {
+      const item = JSON.parse(raw);
+      document.getElementById("name").value = item.name || "";
+      document.getElementById("repository").value = item.image_repository || "";
+      document.getElementById("tag").value = item.image_tag || "";
+      document.getElementById("cwd").value = item.default_cwd || "/workspace";
+      document.getElementById("description").value = item.description || "";
+      document.getElementById("dockerfile").value = item.build?.dockerfile || "";
+      document.getElementById("create-environment").value = item.name || "";
+      output.textContent = JSON.stringify(item, null, 2);
+    };
+
+    window.stopSession = async function (sessionID) {
+      await api(`/api/sessions/${sessionID}/stop`, { method: "POST" });
+      await refresh();
+    };
+
+    document.getElementById("save").addEventListener("click", async () => {
+      const payload = {
+        name: document.getElementById("name").value.trim(),
+        image_repository: document.getElementById("repository").value.trim(),
+        image_tag: document.getElementById("tag").value.trim(),
+        default_cwd: document.getElementById("cwd").value.trim(),
+        description: document.getElementById("description").value.trim(),
+        enabled: true,
+        build: { dockerfile: document.getElementById("dockerfile").value }
+      };
+      const result = await api("/api/environments", { method: "POST", body: JSON.stringify(payload) });
+      output.textContent = JSON.stringify(result.data, null, 2);
+      await refresh();
+    });
+
+    document.getElementById("build").addEventListener("click", async () => {
+      const name = document.getElementById("name").value.trim();
+      const result = await api(`/api/environments/${name}/build`, { method: "POST", body: "{}" });
+      output.textContent = JSON.stringify(result.data, null, 2);
+      await refresh();
+    });
+
+    document.getElementById("create-session").addEventListener("click", async () => {
+      const payload = {
+        environment_name: document.getElementById("create-environment").value.trim(),
+        session_id: document.getElementById("create-session-id").value.trim()
+      };
+      const result = await api("/api/sessions/create", { method: "POST", body: JSON.stringify(payload) });
+      sessionOutput.textContent = JSON.stringify(result.data, null, 2);
+      await refresh();
+    });
+
+    document.getElementById("logout").addEventListener("click", async () => {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+      window.location.href = "/login";
+    });
+
+    refresh().catch((error) => {
+      output.textContent = error.message;
+    });
+  </script>
+</body>
+</html>
