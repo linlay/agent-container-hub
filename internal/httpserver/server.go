@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"strings"
 
-	"agentbox/internal/api"
-	"agentbox/internal/runtime"
-	"agentbox/internal/sandbox"
-	"agentbox/internal/store"
+	"agent-container-hub/internal/api"
+	"agent-container-hub/internal/runtime"
+	"agent-container-hub/internal/sandbox"
+	"agent-container-hub/internal/store"
 )
 
-const authCookieName = "agentbox_auth"
+const authCookieName = "agent-container-hub_auth"
 
 //go:embed ui/*
 var uiFiles embed.FS
@@ -77,8 +77,6 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	mux.Handle("GET /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironment)))
 	mux.Handle("PUT /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
 	mux.Handle("POST /api/environments/{name}/build", server.requireAuth(http.HandlerFunc(server.handleBuildEnvironment)))
-	mux.Handle("POST /execute", server.requireAuth(http.HandlerFunc(server.handleDeprecatedExecute)))
-	mux.Handle("POST /session/stop", server.requireAuth(http.HandlerFunc(server.handleDeprecatedStop)))
 
 	return mux
 }
@@ -236,51 +234,6 @@ func (s *Server) handleUpsertEnvironment(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleBuildEnvironment(w http.ResponseWriter, r *http.Request) {
 	response, err := s.builds.BuildEnvironment(r.Context(), r.PathValue("name"))
-	if err != nil {
-		writeMappedError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, response)
-}
-
-func (s *Server) handleDeprecatedExecute(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		SessionID string   `json:"session_id"`
-		Command   string   `json:"command"`
-		Args      []string `json:"args"`
-		Cwd       string   `json:"cwd"`
-		TimeoutMS int64    `json:"timeout_ms"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if strings.TrimSpace(payload.SessionID) == "" {
-		writeError(w, http.StatusBadRequest, "deprecated /execute only supports existing session_id")
-		return
-	}
-	response, err := s.sessions.Execute(r.Context(), payload.SessionID, api.ExecuteSessionRequest{
-		Command:   payload.Command,
-		Args:      payload.Args,
-		Cwd:       payload.Cwd,
-		TimeoutMS: payload.TimeoutMS,
-	})
-	if err != nil {
-		writeMappedError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, response)
-}
-
-func (s *Server) handleDeprecatedStop(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	response, err := s.sessions.Stop(r.Context(), payload.SessionID)
 	if err != nil {
 		writeMappedError(w, err)
 		return

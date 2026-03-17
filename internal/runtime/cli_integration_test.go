@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"agentbox/internal/model"
+	"agent-container-hub/internal/model"
 )
 
 func TestCLIProviderLifecycleIntegration(t *testing.T) {
@@ -33,7 +33,7 @@ func TestCLIProviderLifecycleIntegration(t *testing.T) {
 			Destination: DefaultMountPath,
 		}},
 		Labels: map[string]string{
-			ManagedByLabel: "agentboxd",
+			ManagedByLabel: "agent-container-hub",
 			SessionIDLabel: "integration",
 		},
 	})

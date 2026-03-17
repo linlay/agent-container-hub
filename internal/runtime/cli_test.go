@@ -169,6 +169,9 @@ func TestCLIProviderCreateDoesNotInspect(t *testing.T) {
 	if strings.Contains(logText, "inspect") {
 		t.Fatalf("Create() unexpectedly called inspect: %s", logText)
 	}
+	if !strings.Contains(logText, "--label sandbox.managed_by=agent-container-hub") {
+		t.Fatalf("Create() log = %q, want managed_by label", logText)
+	}
 }
 
 func TestCLIProviderStartDoesNotInspect(t *testing.T) {

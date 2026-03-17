@@ -6,38 +6,38 @@ import (
 )
 
 type Mount struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	ReadOnly    bool   `json:"read_only"`
+	Source      string `json:"source" yaml:"source"`
+	Destination string `json:"destination" yaml:"destination"`
+	ReadOnly    bool   `json:"read_only" yaml:"read_only"`
 }
 
 type ResourceSpec struct {
-	CPU      float64 `json:"cpu"`
-	MemoryMB int64   `json:"memory_mb"`
-	PIDs     int     `json:"pids"`
+	CPU      float64 `json:"cpu" yaml:"cpu"`
+	MemoryMB int64   `json:"memory_mb" yaml:"memory_mb"`
+	PIDs     int     `json:"pids" yaml:"pids"`
 }
 
 type BuildSpec struct {
-	Dockerfile   string            `json:"dockerfile"`
-	BuildArgs    map[string]string `json:"build_args,omitempty"`
-	Notes        string            `json:"notes,omitempty"`
-	SmokeCommand string            `json:"smoke_command,omitempty"`
-	SmokeArgs    []string          `json:"smoke_args,omitempty"`
+	Dockerfile   string            `json:"dockerfile" yaml:"dockerfile"`
+	BuildArgs    map[string]string `json:"build_args,omitempty" yaml:"build_args,omitempty"`
+	Notes        string            `json:"notes,omitempty" yaml:"notes,omitempty"`
+	SmokeCommand string            `json:"smoke_command,omitempty" yaml:"smoke_command,omitempty"`
+	SmokeArgs    []string          `json:"smoke_args,omitempty" yaml:"smoke_args,omitempty"`
 }
 
 type Environment struct {
-	Name            string            `json:"name"`
-	Description     string            `json:"description,omitempty"`
-	ImageRepository string            `json:"image_repository"`
-	ImageTag        string            `json:"image_tag"`
-	DefaultCwd      string            `json:"default_cwd"`
-	DefaultEnv      map[string]string `json:"default_env,omitempty"`
-	Mounts          []Mount           `json:"mounts,omitempty"`
-	Resources       ResourceSpec      `json:"resources"`
-	Enabled         bool              `json:"enabled"`
-	Build           BuildSpec         `json:"build"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	Name            string            `json:"name" yaml:"name"`
+	Description     string            `json:"description,omitempty" yaml:"description,omitempty"`
+	ImageRepository string            `json:"image_repository" yaml:"image_repository"`
+	ImageTag        string            `json:"image_tag" yaml:"image_tag"`
+	DefaultCwd      string            `json:"default_cwd" yaml:"default_cwd"`
+	DefaultEnv      map[string]string `json:"default_env,omitempty" yaml:"default_env,omitempty"`
+	Mounts          []Mount           `json:"mounts,omitempty" yaml:"mounts,omitempty"`
+	Resources       ResourceSpec      `json:"resources" yaml:"resources"`
+	Enabled         bool              `json:"enabled" yaml:"enabled"`
+	Build           BuildSpec         `json:"build" yaml:"build"`
+	CreatedAt       time.Time         `json:"created_at" yaml:"-"`
+	UpdatedAt       time.Time         `json:"updated_at" yaml:"-"`
 }
 
 func (e *Environment) Clone() *Environment {

@@ -5,29 +5,29 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
-	"agentbox/internal/api"
-	"agentbox/internal/model"
-	"agentbox/internal/store"
+	"agent-container-hub/internal/api"
+	"agent-container-hub/internal/model"
+	"agent-container-hub/internal/store"
 )
 
 type EnvironmentService struct {
-	store  store.Store
-	logger *slog.Logger
+	environments store.EnvironmentStore
+	builds       store.BuildJobStore
+	logger       *slog.Logger
 }
 
-func NewEnvironmentService(st store.Store, logger *slog.Logger) *EnvironmentService {
+func NewEnvironmentService(environments store.EnvironmentStore, builds store.BuildJobStore, logger *slog.Logger) *EnvironmentService {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &EnvironmentService{store: st, logger: logger}
+	return &EnvironmentService{environments: environments, builds: builds, logger: logger}
 }
 
 func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironmentRequest) (*api.EnvironmentResponse, error) {
 	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return nil, fmt.Errorf("%w: name is required", ErrValidation)
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(req.ImageRepository) == "" {
 		return nil, fmt.Errorf("%w: image_repository is required", ErrValidation)
@@ -39,7 +39,6 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		return nil, fmt.Errorf("%w: build.dockerfile is required", ErrValidation)
 	}
 
-	now := time.Now().UTC()
 	environment := &model.Environment{
 		Name:            name,
 		Description:     strings.TrimSpace(req.Description),
@@ -51,28 +50,24 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		Resources:       req.Resources,
 		Enabled:         req.Enabled,
 		Build:           req.Build.Clone(),
-		UpdatedAt:       now,
 	}
 
-	existing, err := s.store.GetEnvironment(ctx, name)
-	switch {
-	case err == nil:
-		environment.CreatedAt = existing.CreatedAt
-	case err == store.ErrNotFound:
-		environment.CreatedAt = now
-	default:
+	if err := s.environments.SaveEnvironment(ctx, environment); err != nil {
 		return nil, err
 	}
-
-	if err := s.store.SaveEnvironment(ctx, environment); err != nil {
+	stored, err := s.environments.GetEnvironment(ctx, name)
+	if err != nil {
 		return nil, err
 	}
 	s.logger.Info("environment upserted", "environment", environment.Name, "image", environment.ImageRef())
-	return s.toResponse(ctx, environment)
+	return s.toResponse(ctx, stored)
 }
 
 func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.EnvironmentResponse, error) {
-	environment, err := s.store.GetEnvironment(ctx, strings.TrimSpace(name))
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
+	}
+	environment, err := s.environments.GetEnvironment(ctx, strings.TrimSpace(name))
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +75,7 @@ func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.Environ
 }
 
 func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentResponse, error) {
-	environments, err := s.store.ListEnvironments(ctx)
+	environments, err := s.environments.ListEnvironments(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +106,7 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,
 	}
-	jobs, err := s.store.ListBuildJobs(ctx, environment.Name)
+	jobs, err := s.builds.ListBuildJobs(ctx, environment.Name)
 	if err != nil {
 		return nil, err
 	}

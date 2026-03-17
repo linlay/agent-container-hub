@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
-	"agentbox/internal/api"
-	"agentbox/internal/config"
-	"agentbox/internal/model"
-	"agentbox/internal/runtime"
-	"agentbox/internal/store"
+	"agent-container-hub/internal/api"
+	"agent-container-hub/internal/config"
+	"agent-container-hub/internal/model"
+	"agent-container-hub/internal/runtime"
+	"agent-container-hub/internal/store"
 )
 
 var (
@@ -31,20 +31,22 @@ var (
 
 type SessionService struct {
 	cfg     config.Config
-	store   store.Store
+	store   store.SessionStore
+	envs    store.EnvironmentStore
 	runtime runtime.Provider
 	logger  *slog.Logger
 	lockMu  sync.Mutex
 	locks   map[string]*sync.Mutex
 }
 
-func NewSessionService(cfg config.Config, st store.Store, provider runtime.Provider, logger *slog.Logger) *SessionService {
+func NewSessionService(cfg config.Config, st store.SessionStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &SessionService{
 		cfg:     cfg,
 		store:   st,
+		envs:    envs,
 		runtime: provider,
 		logger:  logger,
 		locks:   make(map[string]*sync.Mutex),
@@ -53,11 +55,11 @@ func NewSessionService(cfg config.Config, st store.Store, provider runtime.Provi
 
 func (s *SessionService) Create(ctx context.Context, req api.CreateSessionRequest) (*api.SessionResponse, error) {
 	environmentName := strings.TrimSpace(req.EnvironmentName)
-	if environmentName == "" {
-		return nil, fmt.Errorf("%w: environment_name is required", ErrValidation)
+	if err := validateEnvironmentName(environmentName); err != nil {
+		return nil, err
 	}
 
-	environment, err := s.store.GetEnvironment(ctx, environmentName)
+	environment, err := s.envs.GetEnvironment(ctx, environmentName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("%w: environment not found", store.ErrNotFound)

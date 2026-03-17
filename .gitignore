@@ -2,3 +2,5 @@
 .gomodcache/
 .env
 data/
+.DS_Store
+agent-container-hub

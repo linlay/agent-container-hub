@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"agentbox/internal/model"
+	"agent-container-hub/internal/model"
 )
 
 var (

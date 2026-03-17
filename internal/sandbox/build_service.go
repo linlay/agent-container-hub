@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"agentbox/internal/api"
-	"agentbox/internal/config"
-	"agentbox/internal/model"
-	"agentbox/internal/runtime"
-	"agentbox/internal/store"
+	"agent-container-hub/internal/api"
+	"agent-container-hub/internal/config"
+	"agent-container-hub/internal/model"
+	"agent-container-hub/internal/runtime"
+	"agent-container-hub/internal/store"
 )
 
 const (
@@ -23,19 +23,21 @@ const (
 
 type BuildService struct {
 	cfg     config.Config
-	store   store.Store
+	store   store.BuildJobStore
+	envs    store.EnvironmentStore
 	builder runtime.Builder
 	runtime runtime.Provider
 	logger  *slog.Logger
 }
 
-func NewBuildService(cfg config.Config, st store.Store, builder runtime.Builder, provider runtime.Provider, logger *slog.Logger) *BuildService {
+func NewBuildService(cfg config.Config, st store.BuildJobStore, envs store.EnvironmentStore, builder runtime.Builder, provider runtime.Provider, logger *slog.Logger) *BuildService {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &BuildService{
 		cfg:     cfg,
 		store:   st,
+		envs:    envs,
 		builder: builder,
 		runtime: provider,
 		logger:  logger,
@@ -43,7 +45,11 @@ func NewBuildService(cfg config.Config, st store.Store, builder runtime.Builder,
 }
 
 func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.BuildJobResponse, error) {
-	environment, err := s.store.GetEnvironment(ctx, strings.TrimSpace(name))
+	name = strings.TrimSpace(name)
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
+	}
+	environment, err := s.envs.GetEnvironment(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +139,7 @@ func (s *BuildService) runSmokeCheck(ctx context.Context, environment *model.Env
 		}},
 		Resources: environment.Resources,
 		Labels: map[string]string{
-			runtime.ManagedByLabel: "agentboxd",
+			runtime.ManagedByLabel: "agent-container-hub",
 		},
 	})
 	if err != nil {

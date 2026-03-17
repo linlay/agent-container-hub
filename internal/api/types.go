@@ -3,7 +3,7 @@ package api
 import (
 	"time"
 
-	"agentbox/internal/model"
+	"agent-container-hub/internal/model"
 )
 
 type CreateSessionRequest struct {

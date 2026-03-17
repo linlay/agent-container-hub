@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"agentbox/internal/api"
-	"agentbox/internal/config"
-	"agentbox/internal/model"
-	"agentbox/internal/runtime"
-	"agentbox/internal/store"
+	"agent-container-hub/internal/api"
+	"agent-container-hub/internal/config"
+	"agent-container-hub/internal/model"
+	"agent-container-hub/internal/runtime"
+	"agent-container-hub/internal/store"
 )
 
 func TestSessionCreateExecuteAndStop(t *testing.T) {
@@ -164,11 +164,13 @@ func TestBuildEnvironmentStoresSuccessfulJob(t *testing.T) {
 
 	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
 		Name:            "python",
-		ImageRepository: "registry.example.com/agentbox/python",
+		ImageRepository: "registry.example.com/agent-container-hub/python",
 		ImageTag:        "3.11-v1",
 		Enabled:         true,
 		Build: model.BuildSpec{
-			Dockerfile: "FROM busybox:latest\nRUN echo ok\n",
+			Dockerfile:   "FROM busybox:latest\nRUN echo ok\n",
+			SmokeCommand: "/bin/sh",
+			SmokeArgs:    []string{"-lc", "true"},
 		},
 	}); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -185,6 +187,9 @@ func TestBuildEnvironmentStoresSuccessfulJob(t *testing.T) {
 	}
 	if job.Status != buildStatusSucceeded {
 		t.Fatalf("BuildEnvironment() status = %q, want succeeded", job.Status)
+	}
+	if got := fake.lastCreate.Labels[runtime.ManagedByLabel]; got != "agent-container-hub" {
+		t.Fatalf("build managed_by label = %q, want agent-container-hub", got)
 	}
 
 	storedJobs, err := services.store.ListBuildJobs(context.Background(), "python")
@@ -221,6 +226,62 @@ func TestBuildEnvironmentPreservesFailedBuild(t *testing.T) {
 	}
 	if job.Status != buildStatusFailed || job.Error == "" {
 		t.Fatalf("BuildEnvironment() = %+v, want failed job with error", job)
+	}
+}
+
+func TestCreateReturnsNotFoundWhenEnvironmentFileMissing(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if err := services.envs.DeleteEnvironment(context.Background(), "shell"); err != nil {
+		t.Fatalf("DeleteEnvironment() error = %v", err)
+	}
+
+	_, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		EnvironmentName: "shell",
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Create() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestBuildReturnsNotFoundWhenEnvironmentFileMissing(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if err := services.envs.DeleteEnvironment(context.Background(), "shell"); err != nil {
+		t.Fatalf("DeleteEnvironment() error = %v", err)
+	}
+
+	_, err := services.builds.BuildEnvironment(context.Background(), "shell")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("BuildEnvironment() error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -265,7 +326,8 @@ func TestEnvironmentUpdateDoesNotRewriteExistingSessionSnapshot(t *testing.T) {
 }
 
 type testServices struct {
-	store        store.Store
+	store        store.RuntimeStore
+	envs         store.EnvironmentStore
 	sessions     *SessionService
 	environments *EnvironmentService
 	builds       *BuildService
@@ -277,7 +339,8 @@ func newTestServices(t *testing.T) (*testServices, func(), *fakeRuntime) {
 	tempDir := t.TempDir()
 	cfg := config.Config{
 		BindAddr:              "127.0.0.1:0",
-		StateDBPath:           filepath.Join(tempDir, "agentbox.db"),
+		StateDBPath:           filepath.Join(tempDir, "agent-container-hub.db"),
+		ConfigRoot:            filepath.Join(tempDir, "configs"),
 		WorkspaceRoot:         filepath.Join(tempDir, "workspaces"),
 		BuildRoot:             filepath.Join(tempDir, "builds"),
 		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
@@ -293,12 +356,17 @@ func newTestServices(t *testing.T) (*testServices, func(), *fakeRuntime) {
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}
+	envs, err := store.OpenFileEnvironmentStore(filepath.Join(cfg.ConfigRoot, "environments"))
+	if err != nil {
+		t.Fatalf("store.OpenFileEnvironmentStore() error = %v", err)
+	}
 	fake := &fakeRuntime{containers: make(map[string]runtime.ContainerInfo)}
 	return &testServices{
 		store:        st,
-		sessions:     NewSessionService(cfg, st, fake, slog.New(slog.NewTextHandler(os.Stdout, nil))),
-		environments: NewEnvironmentService(st, slog.New(slog.NewTextHandler(os.Stdout, nil))),
-		builds:       NewBuildService(cfg, st, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil))),
+		envs:         envs,
+		sessions:     NewSessionService(cfg, st, envs, fake, slog.New(slog.NewTextHandler(os.Stdout, nil))),
+		environments: NewEnvironmentService(envs, st, slog.New(slog.NewTextHandler(os.Stdout, nil))),
+		builds:       NewBuildService(cfg, st, envs, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil))),
 	}, func() { _ = st.Close() }, fake
 }
 
@@ -306,6 +374,7 @@ type fakeRuntime struct {
 	mu          sync.Mutex
 	containers  map[string]runtime.ContainerInfo
 	execResult  runtime.ExecResult
+	lastCreate  runtime.CreateOptions
 	lastExec    runtime.ExecOptions
 	startCalls  int
 	buildResult runtime.BuildResult
@@ -317,6 +386,7 @@ func (f *fakeRuntime) Name() string { return "fake" }
 func (f *fakeRuntime) Create(_ context.Context, opts runtime.CreateOptions) (runtime.ContainerInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastCreate = opts
 	id := "ctr-" + opts.Name
 	info := runtime.ContainerInfo{
 		ID:        id,

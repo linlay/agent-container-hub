@@ -38,7 +38,7 @@ func (p *CLIProvider) Name() string {
 
 func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (ContainerInfo, error) {
 	args := []string{"create", "--name", opts.Name}
-	args = append(args, "--label", fmt.Sprintf("%s=agentboxd", ManagedByLabel))
+	args = append(args, "--label", fmt.Sprintf("%s=agent-container-hub", ManagedByLabel))
 	for key, value := range opts.Labels {
 		args = append(args, "--label", fmt.Sprintf("%s=%s", key, value))
 	}

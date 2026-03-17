@@ -1,0 +1,10 @@
+name: shell
+description: Basic shell environment managed from configs/.
+image_repository: busybox
+image_tag: latest
+default_cwd: /workspace
+enabled: true
+build:
+  dockerfile: |
+    FROM busybox:latest
+    CMD ["/bin/sh"]

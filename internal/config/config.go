@@ -13,6 +13,7 @@ type Config struct {
 	BindAddr              string
 	AuthToken             string
 	StateDBPath           string
+	ConfigRoot            string
 	WorkspaceRoot         string
 	BuildRoot             string
 	Engine                string
@@ -28,7 +29,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		BindAddr:              getEnv("BIND_ADDR", "127.0.0.1:8080"),
 		AuthToken:             strings.TrimSpace(os.Getenv("AUTH_TOKEN")),
-		StateDBPath:           getEnv("STATE_DB_PATH", filepath.Join(cwd, "data", "agentbox.db")),
+		StateDBPath:           getEnv("STATE_DB_PATH", filepath.Join(cwd, "data", "agent-container-hub.db")),
+		ConfigRoot:            getEnv("CONFIG_ROOT", filepath.Join(cwd, "configs")),
 		WorkspaceRoot:         getEnv("WORKSPACE_ROOT", filepath.Join(cwd, "data", "workspaces")),
 		BuildRoot:             getEnv("BUILD_ROOT", filepath.Join(cwd, "data", "builds")),
 		Engine:                firstNonEmpty(strings.TrimSpace(os.Getenv("ENGINE")), strings.TrimSpace(os.Getenv("RUNTIME"))),
@@ -48,6 +50,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StateDBPath, err = absolutePath(cfg.StateDBPath); err != nil {
 		return Config{}, fmt.Errorf("normalize state db path: %w", err)
+	}
+	if cfg.ConfigRoot, err = absolutePath(cfg.ConfigRoot); err != nil {
+		return Config{}, fmt.Errorf("normalize config root: %w", err)
 	}
 	if cfg.WorkspaceRoot, err = absolutePath(cfg.WorkspaceRoot); err != nil {
 		return Config{}, fmt.Errorf("normalize workspace root: %w", err)
@@ -78,7 +83,7 @@ func (c Config) Validate() error {
 	if host != "127.0.0.1" && host != "localhost" && host != "::1" && c.AuthToken == "" {
 		return fmt.Errorf("AUTH_TOKEN is required when binding to %q", host)
 	}
-	if c.StateDBPath == "" || c.WorkspaceRoot == "" || c.BuildRoot == "" {
+	if c.StateDBPath == "" || c.ConfigRoot == "" || c.WorkspaceRoot == "" || c.BuildRoot == "" {
 		return fmt.Errorf("state paths are required")
 	}
 	return nil

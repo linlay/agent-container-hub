@@ -13,12 +13,12 @@ import (
 
 	"log/slog"
 
-	"agentbox/internal/api"
-	"agentbox/internal/config"
-	"agentbox/internal/model"
-	"agentbox/internal/runtime"
-	"agentbox/internal/sandbox"
-	"agentbox/internal/store"
+	"agent-container-hub/internal/api"
+	"agent-container-hub/internal/config"
+	"agent-container-hub/internal/model"
+	"agent-container-hub/internal/runtime"
+	"agent-container-hub/internal/sandbox"
+	"agent-container-hub/internal/store"
 )
 
 func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
@@ -70,7 +70,7 @@ func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", recorder.Code)
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte("Agentbox Console")) {
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("Agent Container Hub Console")) {
 		t.Fatalf("GET / body = %q, want console html", recorder.Body.String())
 	}
 }
@@ -100,6 +100,70 @@ func TestAuthProtectsAppAndAPI(t *testing.T) {
 	loginResp := doJSON[map[string]string](t, handler, http.MethodPost, "/api/auth/login", api.LoginRequest{Token: "secret"}, http.StatusOK, "")
 	if loginResp["status"] != "ok" {
 		t.Fatalf("loginResp = %+v, want ok", loginResp)
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"token":"secret"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(loginRecorder, loginReq)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("POST /api/auth/login status = %d, want 200", loginRecorder.Code)
+	}
+	cookies := loginRecorder.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected login response to set cookie")
+	}
+	if cookies[0].Name != authCookieName {
+		t.Fatalf("cookie name = %q, want %q", cookies[0].Name, authCookieName)
+	}
+}
+
+func TestListEnvironmentsReturnsFilenameForInvalidYAML(t *testing.T) {
+	t.Parallel()
+
+	handler, cfg := newTestHandlerWithConfig(t, "")
+	if err := os.WriteFile(filepath.Join(cfg.ConfigRoot, "environments", "broken.yaml"), []byte("name: [\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/environments", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /api/environments status = %d, want 500", recorder.Code)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("broken.yaml")) {
+		t.Fatalf("GET /api/environments body = %q, want filename", recorder.Body.String())
+	}
+}
+
+func TestTargetedEnvironmentReadIgnoresUnrelatedInvalidYAML(t *testing.T) {
+	t.Parallel()
+
+	handler, cfg := newTestHandlerWithConfig(t, "")
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	if err := os.WriteFile(filepath.Join(cfg.ConfigRoot, "environments", "broken.yaml"), []byte("name: [\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	envResp := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/shell", nil, http.StatusOK, "")
+	if envResp.Name != "shell" {
+		t.Fatalf("envResp.Name = %q, want shell", envResp.Name)
+	}
+	createResp := doJSON[api.SessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+		SessionID:       "targeted",
+		EnvironmentName: "shell",
+	}, http.StatusOK, "")
+	if createResp.EnvironmentName != "shell" {
+		t.Fatalf("createResp.EnvironmentName = %q, want shell", createResp.EnvironmentName)
 	}
 }
 
@@ -134,11 +198,19 @@ func doJSON[T any](t *testing.T, handler http.Handler, method, path string, payl
 func newTestHandler(t *testing.T, authToken string) http.Handler {
 	t.Helper()
 
+	handler, _ := newTestHandlerWithConfig(t, authToken)
+	return handler
+}
+
+func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, config.Config) {
+	t.Helper()
+
 	tempDir := t.TempDir()
 	cfg := config.Config{
 		BindAddr:              "127.0.0.1:0",
 		AuthToken:             authToken,
-		StateDBPath:           filepath.Join(tempDir, "agentbox.db"),
+		StateDBPath:           filepath.Join(tempDir, "agent-container-hub.db"),
+		ConfigRoot:            filepath.Join(tempDir, "configs"),
 		WorkspaceRoot:         filepath.Join(tempDir, "workspaces"),
 		BuildRoot:             filepath.Join(tempDir, "builds"),
 		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
@@ -155,6 +227,10 @@ func newTestHandler(t *testing.T, authToken string) http.Handler {
 		t.Fatalf("store.Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	envs, err := store.OpenFileEnvironmentStore(filepath.Join(cfg.ConfigRoot, "environments"))
+	if err != nil {
+		t.Fatalf("store.OpenFileEnvironmentStore() error = %v", err)
+	}
 
 	fake := &httpFakeRuntime{
 		containers: make(map[string]runtime.ContainerInfo),
@@ -170,10 +246,10 @@ func newTestHandler(t *testing.T, authToken string) http.Handler {
 			FinishedAt: time.Now().UTC(),
 		},
 	}
-	sessionService := sandbox.NewSessionService(cfg, st, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	environmentService := sandbox.NewEnvironmentService(st, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	buildService := sandbox.NewBuildService(cfg, st, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	return New(sessionService, environmentService, buildService, authToken)
+	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	environmentService := sandbox.NewEnvironmentService(envs, st, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	buildService := sandbox.NewBuildService(cfg, st, envs, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	return New(sessionService, environmentService, buildService, authToken), cfg
 }
 
 type httpFakeRuntime struct {
