@@ -482,25 +482,6 @@ func (s *SessionService) markSessionStopped(ctx context.Context, session *model.
 	return nil
 }
 
-func (s *SessionService) validateMounts(mounts []model.Mount) error {
-	for _, mount := range mounts {
-		source := runtime.NormalizeMountSource(mount.Source)
-		allowed := false
-		for _, root := range s.cfg.AllowedMountRoots {
-			root = runtime.NormalizeMountSource(root)
-			rel, err := filepath.Rel(root, source)
-			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return fmt.Errorf("%w: mount %s is outside allowed roots", ErrValidation, mount.Source)
-		}
-	}
-	return nil
-}
-
 func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []model.Mount, workspacePath string) ([]model.Mount, error) {
 	normalizedEnvMounts, err := s.normalizeMountList(environmentMounts)
 	if err != nil {
@@ -508,12 +489,6 @@ func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []m
 	}
 	normalizedRequestMounts, err := s.normalizeMountList(requestMounts)
 	if err != nil {
-		return nil, err
-	}
-	if err := s.validateMounts(normalizedEnvMounts); err != nil {
-		return nil, err
-	}
-	if err := s.validateMounts(normalizedRequestMounts); err != nil {
 		return nil, err
 	}
 

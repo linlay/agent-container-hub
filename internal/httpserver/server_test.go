@@ -402,8 +402,8 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	if len(dailyOffice.Mounts) != 1 {
 		t.Fatalf("daily-office mounts len = %d, want 1", len(dailyOffice.Mounts))
 	}
-	if dailyOffice.DefaultExecute.Command != "pwd" {
-		t.Fatalf("daily-office default execute = %+v, want pwd", dailyOffice.DefaultExecute)
+	if dailyOffice.DefaultExecute.Command != "/bin/bash" || len(dailyOffice.DefaultExecute.Args) != 2 || dailyOffice.DefaultExecute.TimeoutMS != 30000 {
+		t.Fatalf("daily-office default execute = %+v, want health-check preset", dailyOffice.DefaultExecute)
 	}
 	if dailyOffice.Mounts[0].Destination != "/skills" || !dailyOffice.Mounts[0].ReadOnly {
 		t.Fatalf("daily-office mount = %+v", dailyOffice.Mounts[0])
@@ -469,7 +469,6 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
-		AllowedMountRoots:        []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds"), filepath.Join(tempDir, "zenmind-env")},
 		DefaultCommandTimeout:    time.Second,
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,
@@ -489,7 +488,6 @@ func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Ha
 		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
-		AllowedMountRoots:        []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds"), filepath.Join(tempDir, "zenmind-env")},
 		DefaultCommandTimeout:    time.Second,
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,

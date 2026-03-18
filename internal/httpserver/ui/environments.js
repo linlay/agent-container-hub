@@ -1,4 +1,4 @@
-import { api, escapeHTML, initializeShell } from "/ui/common.js";
+import { api, escapeHTML, initializeShell, setLoading, showToast } from "/ui/common.js";
 
 const state = {
   environments: {
@@ -13,6 +13,8 @@ const state = {
 const environmentList = document.getElementById("environment-list");
 const environmentOutput = document.getElementById("environment-output");
 const environmentYAML = document.getElementById("environment-yaml");
+const saveButton = document.getElementById("save");
+const buildButton = document.getElementById("build");
 
 function clearEnvironmentForm() {
   document.getElementById("name").value = "";
@@ -180,10 +182,17 @@ async function initialize() {
   initializeShell("environments");
 
   document.getElementById("refresh-environments").addEventListener("click", async () => {
-    await refreshEnvironments(state.environments.selectedName);
+    try {
+      await refreshEnvironments(state.environments.selectedName);
+      showToast("Environments refreshed.", "success");
+    } catch (error) {
+      environmentOutput.textContent = error.message;
+      showToast(error.message, "error");
+    }
   });
 
-  document.getElementById("save").addEventListener("click", async () => {
+  saveButton.addEventListener("click", async () => {
+    setLoading(saveButton, true);
     try {
       const result = await api("/api/environments", {
         method: "POST",
@@ -194,27 +203,38 @@ async function initialize() {
       state.environments.selectedDefaultExecute = normalizeExecutePreset(result.default_execute);
       environmentOutput.textContent = "Environment saved.";
       environmentYAML.textContent = result.yaml || "No YAML available.";
+      showToast(`Environment ${result.name} saved.`, "success");
       await refreshEnvironments(result.name);
     } catch (error) {
       environmentOutput.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      setLoading(saveButton, false);
     }
   });
 
-  document.getElementById("build").addEventListener("click", async () => {
+  buildButton.addEventListener("click", async () => {
     const name = document.getElementById("name").value.trim();
     if (!name) {
       environmentOutput.textContent = "Environment name is required before build.";
+      showToast("Environment name is required before build.", "error");
       return;
     }
+
+    setLoading(buildButton, true);
     try {
       const result = await api(`/api/environments/${name}/build`, {
         method: "POST",
         body: "{}",
       });
       environmentOutput.textContent = `Build ${result.status} for ${result.environment_name} (${result.image_ref}).`;
+      showToast(`Build ${result.status} for ${result.environment_name}.`, result.status === "failed" ? "error" : "success");
       await refreshEnvironments(name);
     } catch (error) {
       environmentOutput.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      setLoading(buildButton, false);
     }
   });
 
@@ -223,4 +243,5 @@ async function initialize() {
 
 initialize().catch((error) => {
   environmentOutput.textContent = error.message;
+  showToast(error.message, "error");
 });

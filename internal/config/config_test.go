@@ -23,7 +23,6 @@ func TestLoadNormalizesRelativePaths(t *testing.T) {
 	t.Setenv("CONFIG_ROOT", "./configs")
 	t.Setenv("WORKSPACE_ROOT", "./data/workspaces")
 	t.Setenv("BUILD_ROOT", "./data/builds")
-	t.Setenv("ALLOWED_MOUNT_ROOTS", "./data/workspaces,./extra-mounts")
 	t.Setenv("SESSION_MOUNT_TEMPLATE_ROOT", "./zenmind-env")
 
 	cfg, err := Load()
@@ -46,16 +45,6 @@ func TestLoadNormalizesRelativePaths(t *testing.T) {
 	}
 	if want := filepath.Join(currentWD, "data", "builds"); cfg.BuildRoot != want {
 		t.Fatalf("BuildRoot = %q, want %q", cfg.BuildRoot, want)
-	}
-	wantRoots := []string{
-		filepath.Join(currentWD, "data", "workspaces"),
-		filepath.Join(currentWD, "extra-mounts"),
-		filepath.Join(currentWD, "zenmind-env"),
-	}
-	for i, want := range wantRoots {
-		if cfg.AllowedMountRoots[i] != want {
-			t.Fatalf("AllowedMountRoots[%d] = %q, want %q", i, cfg.AllowedMountRoots[i], want)
-		}
 	}
 	if want := filepath.Join(currentWD, "zenmind-env"); cfg.SessionMountTemplateRoot != want {
 		t.Fatalf("SessionMountTemplateRoot = %q, want %q", cfg.SessionMountTemplateRoot, want)
@@ -80,7 +69,6 @@ func TestLoadUsesRenamedDefaultStateDBPath(t *testing.T) {
 	t.Setenv("CONFIG_ROOT", "")
 	t.Setenv("WORKSPACE_ROOT", "")
 	t.Setenv("BUILD_ROOT", "")
-	t.Setenv("ALLOWED_MOUNT_ROOTS", "")
 	t.Setenv("SESSION_MOUNT_TEMPLATE_ROOT", "")
 
 	cfg, err := Load()

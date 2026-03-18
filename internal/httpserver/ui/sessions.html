@@ -92,6 +92,7 @@
       </div>
     </section>
   </main>
+  <div class="toast-container" id="toast-container"></div>
 
   <div class="modal-backdrop" id="create-session-backdrop">
     <div class="modal">
@@ -102,45 +103,56 @@
         </div>
         <button class="secondary modal-close" data-close-modal="create-session-backdrop">Close</button>
       </div>
-      <div class="stack">
-        <div class="row">
-          <label>Environment
-            <select id="create-environment"></select>
-          </label>
-          <label>Session ID
-            <input id="create-session-id" placeholder="optional-session-id">
-          </label>
-        </div>
+      <div class="modal-body">
+        <div class="stack">
+          <div class="row">
+            <label>Environment
+              <select id="create-environment"></select>
+            </label>
+            <label>Session ID
+              <input id="create-session-id" placeholder="optional-session-id">
+            </label>
+          </div>
 
-        <div class="row">
-          <label>Chat ID Mount
-            <select id="create-chat-id">
-              <option value="">No /tmp chat mount</option>
-            </select>
-          </label>
+          <div class="row">
+            <div class="checkbox-field">
+              <label class="checkbox-inline" for="create-chat-attach">
+                <input id="create-chat-attach" type="checkbox">
+                <span>Attach Chat Directory</span>
+              </label>
+              <div class="field-note">Enable this to mount a selected chat directory into `/tmp` for the new session.</div>
+            </div>
+            <label>Chat ID
+              <select id="create-chat-id" disabled>
+                <option value="">No chats available</option>
+              </select>
+            </label>
+          </div>
+
           <div class="stack">
             <div class="meta" id="create-environment-hint">Loading enabled environments...</div>
             <div class="meta" id="create-template-hint">Loading mount template...</div>
           </div>
-        </div>
 
-        <div class="stack">
-          <div class="toolbar wrap">
-            <div>
-              <h3>Session Mounts</h3>
-              <div class="meta">Prefilled from the mount template root. You can add, edit, or remove rows before create.</div>
+          <div class="stack">
+            <div class="toolbar wrap">
+              <div>
+                <h3>Session Mounts</h3>
+                <div class="meta">Prefilled from the mount template root. You can add, edit, or remove rows before create. `/workspace` stays reserved for the auto workspace mount.</div>
+              </div>
+              <div class="actions">
+                <button class="secondary" id="add-mount-row">Add Mount</button>
+              </div>
             </div>
-            <div class="actions">
-              <button class="secondary" id="add-mount-row">Add Mount</button>
-            </div>
+            <div class="mount-editor-list" id="create-session-mounts"></div>
           </div>
-          <div class="mount-editor-list" id="create-session-mounts"></div>
-        </div>
 
-        <div class="actions">
-          <button id="create-session">Create Session</button>
+          <pre id="session-create-output">No session created yet.</pre>
         </div>
-        <pre id="session-create-output">No session created yet.</pre>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" data-close-modal="create-session-backdrop">Cancel</button>
+        <button id="create-session">Create Session</button>
       </div>
     </div>
   </div>
@@ -156,8 +168,13 @@
           <button class="secondary modal-close" data-close-modal="session-detail-backdrop">Close</button>
         </div>
       </div>
-      <div class="stack" id="session-detail-content">
-        <div class="empty">Select a session from the table to inspect it.</div>
+      <div class="modal-body">
+        <div class="stack" id="session-detail-content">
+          <div class="empty">Select a session from the table to inspect it.</div>
+        </div>
+      </div>
+      <div class="modal-footer" id="session-detail-footer">
+        <button class="secondary" disabled>View Execute</button>
       </div>
     </div>
   </div>
@@ -171,20 +188,21 @@
         </div>
         <button class="secondary modal-close" data-close-modal="execute-log-backdrop">Close</button>
       </div>
-
-      <div class="stack">
-        <div class="toolbar">
-          <div class="meta" id="execute-modal-meta">No session selected.</div>
-          <div class="pagination">
-            <button class="secondary" id="execution-prev">Previous</button>
-            <span class="meta" id="execution-page-meta">Page 1</span>
-            <button class="secondary" id="execution-next">Next</button>
+      <div class="modal-body">
+        <div class="stack">
+          <div class="toolbar">
+            <div class="meta" id="execute-modal-meta">No session selected.</div>
+            <div class="pagination">
+              <button class="secondary" id="execution-prev">Previous</button>
+              <span class="meta" id="execution-page-meta">Page 1</span>
+              <button class="secondary" id="execution-next">Next</button>
+            </div>
           </div>
-        </div>
 
-        <div class="split">
-          <div id="execution-history" class="execution-history"></div>
-          <div id="execution-detail" class="empty">Select an execution from the history list.</div>
+          <div class="split">
+            <div id="execution-history" class="execution-history"></div>
+            <div id="execution-detail" class="empty">Select an execution from the history list.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -198,12 +216,16 @@
           <div class="meta">Runs the environment preset command directly from the session table.</div>
         </div>
         <div class="actions">
-          <button class="secondary" id="quick-execute-open-logs">View Execute Logs</button>
           <button class="secondary modal-close" data-close-modal="quick-execute-backdrop">Close</button>
         </div>
       </div>
-      <div class="stack" id="quick-execute-content">
-        <div class="empty">Run quick execute from a session row to inspect the result.</div>
+      <div class="modal-body">
+        <div class="stack" id="quick-execute-content">
+          <div class="empty">Run quick execute from a session row to inspect the result.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" id="quick-execute-open-logs" disabled>View Execute Logs</button>
       </div>
     </div>
   </div>

@@ -116,9 +116,6 @@ make test
 - `ENGINE`
   - 默认值：自动探测
   - 可选值：`docker`、`podman`
-- `ALLOWED_MOUNT_ROOTS`
-  - 默认值：`WORKSPACE_ROOT`
-  - 允许额外挂载的宿主机路径白名单
 - `DEFAULT_COMMAND_TIMEOUT`
   - 默认值：`30s`
   - execute 请求未显式提供 `timeout_ms` 时的默认超时
@@ -152,9 +149,6 @@ BUILD_ROOT=./data/builds
 
 # Container engine: docker or podman. Leave empty for auto-detection.
 ENGINE=
-
-# Comma-separated whitelist of host paths allowed in mounts[].source.
-ALLOWED_MOUNT_ROOTS=./data/workspaces,/tmp/agent-container-hub-mounts
 
 # Default timeout used when execute requests omit timeout_ms.
 DEFAULT_COMMAND_TIMEOUT=30s
@@ -324,7 +318,6 @@ curl -X POST http://127.0.0.1:11960/api/environments/shell/build
 ```
 
 宿主机仍需要具备容器引擎权限，以及访问基础镜像、apt/pip/npm 源和 Himalaya 下载源的能力。
-另外，若要创建 `daily-office` session，需要把 `/Users/linlay/Project/all-skills` 加入 `ALLOWED_MOUNT_ROOTS`。
 
 ### Environment YAML
 
@@ -370,7 +363,6 @@ build:
 - API 的 `POST/PUT /api/environments*` 会直接写入或覆盖对应 YAML 文件
 - 手工修改 YAML 后无需重启，后续读取会直接生效
 - `daily-office` 默认会把宿主机 `/Users/linlay/Project/all-skills` 只读挂载到容器内 `/skills`
-- `ALLOWED_MOUNT_ROOTS` 必须包含 `/Users/linlay/Project/all-skills`，否则 `daily-office` session 创建会被挂载白名单拒绝
 - `GET /api/environments` 遇到坏 YAML 会返回错误并带上文件名
 - `GET /api/environments/{name}`、创建 session、触发 build 只读取目标文件，不受无关坏文件影响
 - `GET /api/environments/{name}` 与管理站保存/选中环境后，会同时返回 YAML 预览文本
@@ -435,7 +427,7 @@ make docker-build
 - session 创建失败
   - 检查 `environment_name` 是否存在且已启用
   - 检查 `configs/environments/<name>.yaml` 是否存在且格式合法
-  - 检查 environment 中的 mount 是否位于 `ALLOWED_MOUNT_ROOTS` 白名单内
+  - 检查 mount 的 `destination` 是否重复，且不要占用保留路径 `/workspace`
 - execute 日志为空
   - 检查是否设置了 `ENABLE_EXEC_LOG_PERSIST=true`
   - 检查 `EXEC_LOG_MAX_OUTPUT_BYTES` 是否过小导致输出被截断

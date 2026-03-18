@@ -6,6 +6,8 @@ import {
   formatTime,
   initializeShell,
   openModal,
+  setLoading,
+  showToast,
 } from "/ui/common.js";
 
 const state = {
@@ -33,6 +35,7 @@ const state = {
     templateRoot: "",
     templateMounts: [],
     chatIDs: [],
+    attachChat: false,
     selectedChatID: "",
     mounts: [],
   },
@@ -48,13 +51,16 @@ const sessionListMeta = document.getElementById("session-list-meta");
 const sessionSelectionMeta = document.getElementById("session-selection-meta");
 const sessionPageMeta = document.getElementById("session-page-meta");
 const sessionDetailContent = document.getElementById("session-detail-content");
+const sessionDetailFooter = document.getElementById("session-detail-footer");
 const sessionCreateOutput = document.getElementById("session-create-output");
 const createEnvironmentSelect = document.getElementById("create-environment");
+const createChatAttachCheckbox = document.getElementById("create-chat-attach");
 const createChatIDSelect = document.getElementById("create-chat-id");
 const createEnvironmentHint = document.getElementById("create-environment-hint");
 const createTemplateHint = document.getElementById("create-template-hint");
 const createSessionButton = document.getElementById("create-session");
 const createSessionMounts = document.getElementById("create-session-mounts");
+const refreshSessionsButton = document.getElementById("refresh-sessions");
 const executionHistory = document.getElementById("execution-history");
 const executionDetail = document.getElementById("execution-detail");
 const executionPageMeta = document.getElementById("execution-page-meta");
@@ -168,20 +174,27 @@ function renderCreateEnvironmentOptions(preferredName = "") {
 }
 
 function renderChatOptions() {
-  const options = [`<option value="">No /tmp chat mount</option>`];
-  for (const chatID of state.createSession.chatIDs) {
-    options.push(`<option value="${escapeHTML(chatID)}">${escapeHTML(chatID)}</option>`);
+  const chatIDs = state.createSession.chatIDs;
+  const options = chatIDs.length > 0
+    ? [`<option value="">Select chat directory</option>`, ...chatIDs.map((chatID) => `<option value="${escapeHTML(chatID)}">${escapeHTML(chatID)}</option>`)]
+    : [`<option value="">No chats available</option>`];
+
+  if (state.createSession.selectedChatID && !chatIDs.includes(state.createSession.selectedChatID)) {
+    state.createSession.selectedChatID = "";
   }
+
   createChatIDSelect.innerHTML = options.join("");
+  createChatAttachCheckbox.checked = state.createSession.attachChat;
+  createChatIDSelect.disabled = !state.createSession.attachChat || chatIDs.length === 0;
   createChatIDSelect.value = state.createSession.selectedChatID || "";
 }
 
 function resetCreateSessionForm() {
   state.createSession.selectedEnvironment = preferredEnvironmentName();
+  state.createSession.attachChat = false;
   state.createSession.selectedChatID = "";
   state.createSession.mounts = state.createSession.templateMounts.map((mount) => ({ ...mount }));
   createEnvironmentSelect.value = state.createSession.selectedEnvironment || "";
-  createChatIDSelect.value = "";
   document.getElementById("create-session-id").value = "";
   renderChatOptions();
   renderSessionMountEditor();
@@ -199,7 +212,7 @@ function addMountRow(origin = "manual") {
 
 function syncChatMount() {
   state.createSession.mounts = state.createSession.mounts.filter((mount) => mount.origin !== "chat");
-  if (state.createSession.selectedChatID && state.createSession.templateRoot) {
+  if (state.createSession.attachChat && state.createSession.selectedChatID && state.createSession.templateRoot) {
     state.createSession.mounts.push({
       source: `${state.createSession.templateRoot}/chats/${state.createSession.selectedChatID}`,
       destination: "/tmp",
@@ -217,7 +230,7 @@ function renderSessionMountEditor() {
   }
 
   createSessionMounts.innerHTML = state.createSession.mounts.map((mount, index) => `
-    <div class="mount-editor">
+    <div class="mount-editor" data-origin="${escapeHTML(mount.origin)}">
       <div class="mount-editor-head">
         <span class="pill">${escapeHTML(mount.origin)}</span>
         <button class="secondary" data-remove-mount="${index}">Remove</button>
@@ -230,15 +243,12 @@ function renderSessionMountEditor() {
           <input data-mount-field="destination" data-mount-index="${index}" value="${escapeHTML(mount.destination)}" placeholder="/container/path">
         </label>
       </div>
-      <div class="row">
-        <label>Access
-          <select data-mount-field="read_only" data-mount-index="${index}">
-            <option value="false" ${mount.read_only ? "" : "selected"}>Read write</option>
-            <option value="true" ${mount.read_only ? "selected" : ""}>Read only</option>
-          </select>
-        </label>
-        <div class="meta">Review every mount before create. `/workspace` is reserved for the auto workspace mount.</div>
-      </div>
+      <label class="full-width">Access
+        <select data-mount-field="read_only" data-mount-index="${index}">
+          <option value="false" ${mount.read_only ? "" : "selected"}>Read write</option>
+          <option value="true" ${mount.read_only ? "selected" : ""}>Read only</option>
+        </select>
+      </label>
     </div>
   `).join("");
 
@@ -271,8 +281,9 @@ function renderSessionMountEditor() {
       const mount = state.createSession.mounts[index];
       state.createSession.mounts.splice(index, 1);
       if (mount?.origin === "chat") {
+        state.createSession.attachChat = false;
         state.createSession.selectedChatID = "";
-        createChatIDSelect.value = "";
+        renderChatOptions();
       }
       renderSessionMountEditor();
     });
@@ -342,7 +353,9 @@ function renderSessionTable() {
       if (event.target.closest("button")) {
         return;
       }
-      openSessionDetail(row.dataset.rowSessionId);
+      openSessionDetail(row.dataset.rowSessionId).catch((error) => {
+        showToast(error.message, "error");
+      });
     });
   });
 
@@ -356,7 +369,7 @@ function renderSessionTable() {
         return;
       }
       if (action === "quick-execute") {
-        await quickExecuteSession(sessionID, button.dataset.environmentName);
+        await quickExecuteSession(sessionID, button.dataset.environmentName, button);
         return;
       }
       if (action === "executions") {
@@ -364,7 +377,7 @@ function renderSessionTable() {
         return;
       }
       if (action === "stop") {
-        await stopSession(sessionID, true);
+        await stopSession(sessionID, true, button);
       }
     });
   });
@@ -383,6 +396,7 @@ function renderSessionDetail() {
   const item = state.sessionDetail;
   if (!item) {
     sessionDetailContent.innerHTML = `<div class="empty">Select a session from the table to inspect it.</div>`;
+    sessionDetailFooter.innerHTML = `<button class="secondary" disabled>View Execute</button>`;
     return;
   }
 
@@ -403,15 +417,9 @@ function renderSessionDetail() {
   }).join("") || `<div class="empty">No mounts recorded for this session.</div>`;
 
   sessionDetailContent.innerHTML = `
-    <div class="toolbar wrap">
-      <div>
-        <h3>${escapeHTML(item.session_id)}</h3>
-        <div class="meta">${escapeHTML(item.environment_name)} · ${escapeHTML(item.image || "-")}</div>
-      </div>
-      <div class="actions">
-        <button class="secondary" id="detail-open-executions">View Execute</button>
-        ${item.status === "active" ? `<button class="danger" id="detail-stop-session">Stop Session</button>` : ""}
-      </div>
+    <div>
+      <h3>${escapeHTML(item.session_id)}</h3>
+      <div class="meta">${escapeHTML(item.environment_name)} · ${escapeHTML(item.image || "-")}</div>
     </div>
 
     <div class="detail-grid">
@@ -448,6 +456,11 @@ function renderSessionDetail() {
     </div>
   `;
 
+  sessionDetailFooter.innerHTML = `
+    <button class="secondary" id="detail-open-executions">View Execute</button>
+    ${item.status === "active" ? `<button class="danger" id="detail-stop-session">Stop Session</button>` : ""}
+  `;
+
   document.getElementById("detail-open-executions").addEventListener("click", async () => {
     await openExecuteLogs(item.session_id);
   });
@@ -455,7 +468,7 @@ function renderSessionDetail() {
   const stopButton = document.getElementById("detail-stop-session");
   if (stopButton) {
     stopButton.addEventListener("click", async () => {
-      await stopSession(item.session_id, false);
+      await stopSession(item.session_id, false, stopButton);
     });
   }
 }
@@ -561,6 +574,7 @@ function renderExecuteLogs() {
 }
 
 function renderQuickExecuteResult(payload) {
+  quickExecuteOpenLogsButton.disabled = !state.quickExecute.sessionID;
   if (payload.error) {
     quickExecuteContent.innerHTML = `<div class="empty">${escapeHTML(payload.error)}</div>`;
     return;
@@ -600,17 +614,21 @@ function renderQuickExecuteResult(payload) {
   `;
 }
 
-async function quickExecuteSession(sessionID, environmentName) {
+async function quickExecuteSession(sessionID, environmentName, button) {
   const preset = quickExecutePresetForEnvironment(environmentName);
   state.quickExecute.sessionID = sessionID;
   state.quickExecute.environmentName = environmentName;
   state.quickExecute.preset = preset;
+  quickExecuteOpenLogsButton.disabled = false;
+
   if (!(preset.command || "").trim()) {
     renderQuickExecuteResult({ error: "No quick execute preset is configured for this environment." });
+    showToast("Quick execute preset is not configured for this environment.", "error");
     openModal("quick-execute-backdrop");
     return;
   }
 
+  setLoading(button, true);
   try {
     const response = await api(`/api/sessions/${sessionID}/execute`, {
       method: "POST",
@@ -624,14 +642,18 @@ async function quickExecuteSession(sessionID, environmentName) {
     renderQuickExecuteResult({ sessionID, environmentName, preset, response });
   } catch (error) {
     renderQuickExecuteResult({ error: error.message });
+    showToast(error.message, "error");
+  } finally {
+    setLoading(button, false);
   }
   openModal("quick-execute-backdrop");
 }
 
-async function stopSession(sessionID, reopenDetail) {
+async function stopSession(sessionID, reopenDetail, button) {
+  setLoading(button, true);
   try {
-    const result = await api(`/api/sessions/${sessionID}/stop`, { method: "POST", body: "{}" });
-    sessionCreateOutput.textContent = JSON.stringify(result, null, 2);
+    await api(`/api/sessions/${sessionID}/stop`, { method: "POST", body: "{}" });
+    showToast(`Session ${sessionID} stopped.`, "success");
     await refreshSessions(true);
     if (reopenDetail) {
       await openSessionDetail(sessionID);
@@ -641,7 +663,12 @@ async function stopSession(sessionID, reopenDetail) {
     renderSessionDetail();
     renderSessionTable();
   } catch (error) {
-    sessionCreateOutput.textContent = error.message;
+    showToast(error.message, "error");
+    if (!reopenDetail) {
+      sessionCreateOutput.textContent = error.message;
+    }
+  } finally {
+    setLoading(button, false);
   }
 }
 
@@ -651,6 +678,15 @@ async function initialize() {
 
   createEnvironmentSelect.addEventListener("change", () => {
     state.createSession.selectedEnvironment = createEnvironmentSelect.value;
+  });
+
+  createChatAttachCheckbox.addEventListener("change", () => {
+    state.createSession.attachChat = createChatAttachCheckbox.checked;
+    if (!state.createSession.attachChat) {
+      state.createSession.selectedChatID = "";
+    }
+    renderChatOptions();
+    syncChatMount();
   });
 
   createChatIDSelect.addEventListener("change", () => {
@@ -672,6 +708,7 @@ async function initialize() {
     } catch (error) {
       createTemplateHint.textContent = error.message;
       sessionCreateOutput.textContent = error.message;
+      showToast(error.message, "error");
       if (state.createSession.mounts.length === 0) {
         renderSessionMountEditor();
       }
@@ -679,11 +716,20 @@ async function initialize() {
     openModal("create-session-backdrop");
   });
 
-  document.getElementById("refresh-sessions").addEventListener("click", async () => {
-    await Promise.all([
-      refreshSessions(true),
-      refreshEnvironmentMetadata(),
-    ]);
+  refreshSessionsButton.addEventListener("click", async () => {
+    setLoading(refreshSessionsButton, true);
+    try {
+      await Promise.all([
+        refreshSessions(true),
+        refreshEnvironmentMetadata(),
+      ]);
+      showToast("Sessions refreshed.", "success");
+    } catch (error) {
+      sessionCreateOutput.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      setLoading(refreshSessionsButton, false);
+    }
   });
 
   document.getElementById("apply-session-filter").addEventListener("click", async () => {
@@ -727,9 +773,11 @@ async function initialize() {
     const environmentName = createEnvironmentSelect.value.trim();
     if (!environmentName) {
       sessionCreateOutput.textContent = "Select an enabled environment before creating a session.";
+      showToast("Select an enabled environment before creating a session.", "error");
       return;
     }
 
+    setLoading(createSessionButton, true);
     try {
       const result = await api("/api/sessions/create", {
         method: "POST",
@@ -743,6 +791,7 @@ async function initialize() {
       state.createSession.selectedEnvironment = result.environment_name;
       sessionCreateOutput.textContent = JSON.stringify(result, null, 2);
       closeModal("create-session-backdrop");
+      showToast(`Session ${result.session_id} created.`, "success");
       state.sessions.filters.status = "active";
       document.getElementById("session-filter-status").value = "active";
       state.sessions.page = 1;
@@ -750,6 +799,9 @@ async function initialize() {
       await openSessionDetail(result.session_id);
     } catch (error) {
       sessionCreateOutput.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      setLoading(createSessionButton, false);
     }
   });
 
@@ -780,10 +832,13 @@ async function initialize() {
     refreshSessions(false),
     refreshEnvironmentMetadata(),
   ]);
+  renderSessionDetail();
+  renderChatOptions();
 }
 
 initialize().catch((error) => {
   createEnvironmentHint.textContent = error.message;
   createTemplateHint.textContent = error.message;
   sessionCreateOutput.textContent = error.message;
+  showToast(error.message, "error");
 });

@@ -18,7 +18,6 @@ type Config struct {
 	BuildRoot                string
 	SessionMountTemplateRoot string
 	Engine                   string
-	AllowedMountRoots        []string
 	DefaultCommandTimeout    time.Duration
 	EnableExecLogPersist     bool
 	ExecLogMaxOutputBytes    int
@@ -42,18 +41,6 @@ func Load() (Config, error) {
 		EnableExecLogPersist:     getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
 		ExecLogMaxOutputBytes:    getEnvInt("EXEC_LOG_MAX_OUTPUT_BYTES", 65536),
 	}
-	allowedRoots := strings.TrimSpace(os.Getenv("ALLOWED_MOUNT_ROOTS"))
-	if allowedRoots == "" {
-		cfg.AllowedMountRoots = []string{cfg.WorkspaceRoot}
-	} else {
-		for _, root := range strings.Split(allowedRoots, ",") {
-			root = strings.TrimSpace(root)
-			if root == "" {
-				continue
-			}
-			cfg.AllowedMountRoots = append(cfg.AllowedMountRoots, root)
-		}
-	}
 	if cfg.StateDBPath, err = absolutePath(cfg.StateDBPath); err != nil {
 		return Config{}, fmt.Errorf("normalize state db path: %w", err)
 	}
@@ -69,13 +56,6 @@ func Load() (Config, error) {
 	if cfg.SessionMountTemplateRoot, err = absolutePath(cfg.SessionMountTemplateRoot); err != nil {
 		return Config{}, fmt.Errorf("normalize session mount template root: %w", err)
 	}
-	for i, root := range cfg.AllowedMountRoots {
-		cfg.AllowedMountRoots[i], err = absolutePath(root)
-		if err != nil {
-			return Config{}, fmt.Errorf("normalize allowed mount root %q: %w", root, err)
-		}
-	}
-	cfg.AllowedMountRoots = appendUniquePath(cfg.AllowedMountRoots, cfg.SessionMountTemplateRoot)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -163,17 +143,4 @@ func absolutePath(path string) (string, error) {
 		return "", nil
 	}
 	return filepath.Abs(path)
-}
-
-func appendUniquePath(paths []string, value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return paths
-	}
-	for _, path := range paths {
-		if path == value {
-			return paths
-		}
-	}
-	return append(paths, value)
 }

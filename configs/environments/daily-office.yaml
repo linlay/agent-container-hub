@@ -13,7 +13,31 @@ mounts:
     read_only: true
 enabled: true
 default_execute:
-  command: pwd
+  command: /bin/bash
+  args:
+    - -lc
+    - |
+      echo "=== Environment Health Check ==="
+      echo "Hostname: $(hostname)"
+      echo "User: $(whoami)"
+      echo "Working Dir: $(pwd)"
+      echo "Disk Usage: $(df -h /workspace | tail -1)"
+      echo ""
+      echo "=== Tool Versions ==="
+      echo "Python: $(python --version 2>&1)"
+      echo "Node: $(node --version 2>&1)"
+      echo "LibreOffice: $(soffice --version 2>&1)"
+      echo "Himalaya: $(himalaya --version 2>&1 || echo 'not available')"
+      echo ""
+      echo "=== Python Packages ==="
+      python -c "import openpyxl, pandas, pdfplumber, reportlab; print('Core packages OK')"
+      echo ""
+      echo "=== Node Packages ==="
+      node -e "require('docx'); require('pptxgenjs'); require('sharp'); console.log('Core packages OK')"
+      echo ""
+      echo "=== Skills Mount ==="
+      ls /skills/ 2>/dev/null || echo '/skills not mounted'
+  timeout_ms: 30000
 build:
   notes: Runtime skills are mounted from /Users/linlay/Project/all-skills to /skills as read-only content.
   dockerfile: |

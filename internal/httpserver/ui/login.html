@@ -4,21 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Agent Container Hub Login</title>
-  <style>
-    :root { color-scheme: light; --bg:#f3efe6; --panel:#fffaf0; --ink:#1f2a2f; --accent:#b34c2e; --muted:#6b6f72; }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family: Georgia, "Times New Roman", serif; background: radial-gradient(circle at top,#fffdf6, var(--bg)); color:var(--ink); min-height:100vh; display:grid; place-items:center; }
-    main { width:min(460px, calc(100vw - 32px)); padding:32px; background:var(--panel); border:1px solid rgba(31,42,47,.12); box-shadow:0 24px 60px rgba(31,42,47,.08); }
-    h1 { margin:0 0 8px; font-size:32px; }
-    p { margin:0 0 24px; color:var(--muted); line-height:1.5; }
-    input, button { width:100%; padding:12px 14px; font:inherit; }
-    input { margin-bottom:12px; border:1px solid rgba(31,42,47,.18); background:#fff; }
-    button { border:none; background:var(--accent); color:#fff; cursor:pointer; }
-    .hint { margin-top:12px; color:var(--muted); font-size:14px; min-height:20px; }
-  </style>
+  <link rel="stylesheet" href="/ui/styles.css">
 </head>
-<body>
-  <main>
+<body class="login-page">
+  <main class="card login-card">
     <h1>Agent Container Hub</h1>
     <p>Use the administrator token to enter the sandbox and image manager.</p>
     <input id="token" type="password" placeholder="Bearer token">

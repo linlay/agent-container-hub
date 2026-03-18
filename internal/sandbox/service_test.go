@@ -288,6 +288,48 @@ func TestCreateMergesEnvironmentAndSessionMounts(t *testing.T) {
 	}
 }
 
+func TestCreateAcceptsMountOutsideFormerAllowedRoots(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	externalSource := filepath.Join(t.TempDir(), "external-mount")
+	if err := os.MkdirAll(externalSource, 0o755); err != nil {
+		t.Fatalf("MkdirAll(externalSource) error = %v", err)
+	}
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "outside-former-roots",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      externalSource,
+			Destination: "/external",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(created.Mounts) != 2 {
+		t.Fatalf("created mounts len = %d, want 2", len(created.Mounts))
+	}
+	if fake.lastCreate.Mounts[0].Source != runtime.NormalizeMountSource(externalSource) {
+		t.Fatalf("session mount source = %q, want %q", fake.lastCreate.Mounts[0].Source, runtime.NormalizeMountSource(externalSource))
+	}
+}
+
 func TestCreateRejectsDuplicateMountDestinations(t *testing.T) {
 	t.Parallel()
 
@@ -599,9 +641,7 @@ func TestDailyOfficeBuildUsesInlineDockerfileAndPassesBuildArgs(t *testing.T) {
 func TestDailyOfficeSessionIncludesSkillsMount(t *testing.T) {
 	t.Parallel()
 
-	services, cleanup, fake := newTestServicesWithOptions(t, func(cfg *config.Config) {
-		cfg.AllowedMountRoots = append(cfg.AllowedMountRoots, filepath.Join(filepath.Dir(cfg.WorkspaceRoot), "skills-root"))
-	})
+	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
 
 	skillsRoot := filepath.Join(filepath.Dir(services.sessions.cfg.WorkspaceRoot), "skills-root")
@@ -945,7 +985,6 @@ func newTestServicesWithOptions(t *testing.T, configure func(*config.Config)) (*
 		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
-		AllowedMountRoots:        []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds"), filepath.Join(tempDir, "zenmind-env")},
 		DefaultCommandTimeout:    100 * time.Millisecond,
 		ExecLogMaxOutputBytes:    65536,
 	}
