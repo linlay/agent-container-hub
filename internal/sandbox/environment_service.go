@@ -22,7 +22,11 @@ func NewEnvironmentService(environments store.EnvironmentStore, builds store.Bui
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &EnvironmentService{environments: environments, builds: builds, logger: logger}
+	return &EnvironmentService{
+		environments: environments,
+		builds:       builds,
+		logger:       logger,
+	}
 }
 
 func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironmentRequest) (*api.EnvironmentResponse, error) {

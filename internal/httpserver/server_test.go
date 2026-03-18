@@ -247,6 +247,92 @@ func TestTargetedEnvironmentReadIgnoresUnrelatedInvalidYAML(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAPIResponsePreservesBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	saved := doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+			BuildArgs: map[string]string{
+				"NPM_REGISTRY": "https://registry.npmjs.org",
+			},
+			Notes:        "managed by repo context",
+			SmokeCommand: "/bin/sh",
+			SmokeArgs:    []string{"-lc", "command -v bash"},
+		},
+	}, http.StatusOK, "")
+	if saved.Build.BuildArgs["NPM_REGISTRY"] != "https://registry.npmjs.org" {
+		t.Fatalf("saved.Build.BuildArgs = %+v", saved.Build.BuildArgs)
+	}
+	if saved.Build.Notes != "managed by repo context" {
+		t.Fatalf("saved.Build.Notes = %q", saved.Build.Notes)
+	}
+	if saved.Build.SmokeCommand != "/bin/sh" {
+		t.Fatalf("saved.Build.SmokeCommand = %q", saved.Build.SmokeCommand)
+	}
+
+	got := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/daily-office", nil, http.StatusOK, "")
+	if got.Build.BuildArgs["NPM_REGISTRY"] != "https://registry.npmjs.org" {
+		t.Fatalf("GET Build.BuildArgs = %+v", got.Build.BuildArgs)
+	}
+	if got.Build.Notes != "managed by repo context" {
+		t.Fatalf("GET Build.Notes = %q", got.Build.Notes)
+	}
+	if got.Build.SmokeCommand != "/bin/sh" || len(got.Build.SmokeArgs) != 2 {
+		t.Fatalf("GET Build smoke config = %+v", got.Build)
+	}
+}
+
+func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
+	t.Parallel()
+
+	repoRoot, err := repoRootFromPackageDir()
+	if err != nil {
+		t.Fatalf("repoRootFromPackageDir() error = %v", err)
+	}
+	handler := newHandlerForConfigRoot(t, "", filepath.Join(repoRoot, "configs"))
+
+	envs := doJSON[[]api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments", nil, http.StatusOK, "")
+	found := false
+	for _, env := range envs {
+		if env.Name == "daily-office" {
+			found = true
+			if env.ImageRef != "daily-office:latest" {
+				t.Fatalf("daily-office image_ref = %q, want daily-office:latest", env.ImageRef)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("daily-office not found in %+v", envs)
+	}
+
+	dailyOffice := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/daily-office", nil, http.StatusOK, "")
+	if len(dailyOffice.Mounts) != 1 {
+		t.Fatalf("daily-office mounts len = %d, want 1", len(dailyOffice.Mounts))
+	}
+	if dailyOffice.Mounts[0].Destination != "/skills" || !dailyOffice.Mounts[0].ReadOnly {
+		t.Fatalf("daily-office mount = %+v", dailyOffice.Mounts[0])
+	}
+	if dailyOffice.DefaultEnv["NODE_PATH"] != "/opt/daily-office/node_modules" {
+		t.Fatalf("daily-office NODE_PATH = %q", dailyOffice.DefaultEnv["NODE_PATH"])
+	}
+	if !bytes.Contains([]byte(dailyOffice.DefaultEnv["PATH"]), []byte("/skills/scripts")) {
+		t.Fatalf("daily-office PATH = %q", dailyOffice.DefaultEnv["PATH"])
+	}
+	if bytes.Contains([]byte(dailyOffice.Build.Dockerfile), []byte("COPY ")) {
+		t.Fatalf("daily-office Dockerfile unexpectedly contains COPY")
+	}
+	if len(dailyOffice.Build.SmokeArgs) == 0 || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("python -c")) || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("node -e")) {
+		t.Fatalf("daily-office smoke args = %+v, want python/node import checks", dailyOffice.Build.SmokeArgs)
+	}
+}
+
 func doJSON[T any](t *testing.T, handler http.Handler, method, path string, payload any, wantStatus int, bearer string) T {
 	t.Helper()
 
@@ -298,6 +384,32 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 		EnableExecLogPersist:  true,
 		ExecLogMaxOutputBytes: 65536,
 	}
+	return newHandlerForConfig(t, cfg)
+}
+
+func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Handler {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	cfg := config.Config{
+		BindAddr:              "127.0.0.1:0",
+		AuthToken:             authToken,
+		StateDBPath:           filepath.Join(tempDir, "agent-container-hub.db"),
+		ConfigRoot:            configRoot,
+		WorkspaceRoot:         filepath.Join(tempDir, "workspaces"),
+		BuildRoot:             filepath.Join(tempDir, "builds"),
+		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
+		DefaultCommandTimeout: time.Second,
+		EnableExecLogPersist:  true,
+		ExecLogMaxOutputBytes: 65536,
+	}
+	handler, _ := newHandlerForConfig(t, cfg)
+	return handler
+}
+
+func newHandlerForConfig(t *testing.T, cfg config.Config) (http.Handler, config.Config) {
+	t.Helper()
+
 	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspaces) error = %v", err)
 	}
@@ -331,7 +443,15 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
 	environmentService := sandbox.NewEnvironmentService(envs, st, slog.New(slog.NewTextHandler(os.Stdout, nil)))
 	buildService := sandbox.NewBuildService(cfg, st, envs, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	return New(sessionService, environmentService, buildService, authToken), cfg
+	return New(sessionService, environmentService, buildService, cfg.AuthToken), cfg
+}
+
+func repoRootFromPackageDir() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(filepath.Join(wd, "..", "..")), nil
 }
 
 type httpFakeRuntime struct {

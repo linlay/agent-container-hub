@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -358,6 +359,140 @@ func TestBuildEnvironmentPreservesFailedBuild(t *testing.T) {
 	}
 }
 
+func TestBuildEnvironmentUsesInlineDockerfileOnlyContext(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	if _, err := services.builds.BuildEnvironment(context.Background(), "shell"); err != nil {
+		t.Fatalf("BuildEnvironment() error = %v", err)
+	}
+	if fake.lastBuild.Image != "busybox:latest" {
+		t.Fatalf("lastBuild.Image = %q, want busybox:latest", fake.lastBuild.Image)
+	}
+	if len(fake.buildFiles) != 1 {
+		t.Fatalf("buildFiles len = %d, want 1", len(fake.buildFiles))
+	}
+	if got := fake.buildFiles["Dockerfile"]; got != "FROM busybox:latest\nCMD [\"/bin/sh\"]\n" {
+		t.Fatalf("Dockerfile = %q", got)
+	}
+}
+
+func TestDailyOfficeBuildUsesInlineDockerfileAndPassesBuildArgs(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\nRUN echo daily-office\n",
+			BuildArgs: map[string]string{
+				"NPM_REGISTRY": "https://registry.npmjs.org",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	if _, err := services.builds.BuildEnvironment(context.Background(), "daily-office"); err != nil {
+		t.Fatalf("BuildEnvironment() error = %v", err)
+	}
+	if fake.lastBuild.Image != "daily-office:latest" {
+		t.Fatalf("lastBuild.Image = %q, want daily-office:latest", fake.lastBuild.Image)
+	}
+	if got := fake.lastBuild.BuildArgs["NPM_REGISTRY"]; got != "https://registry.npmjs.org" {
+		t.Fatalf("BuildArgs[NPM_REGISTRY] = %q", got)
+	}
+	if len(fake.buildFiles) != 1 {
+		t.Fatalf("buildFiles len = %d, want 1", len(fake.buildFiles))
+	}
+	if got := fake.buildFiles["Dockerfile"]; got != "FROM busybox:latest\nRUN echo daily-office\n" {
+		t.Fatalf("Dockerfile = %q", got)
+	}
+	if strings.Contains(fake.buildFiles["Dockerfile"], "COPY ") {
+		t.Fatalf("Dockerfile unexpectedly contains COPY: %q", fake.buildFiles["Dockerfile"])
+	}
+}
+
+func TestDailyOfficeSessionIncludesSkillsMount(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServicesWithOptions(t, func(cfg *config.Config) {
+		cfg.AllowedMountRoots = append(cfg.AllowedMountRoots, filepath.Join(filepath.Dir(cfg.WorkspaceRoot), "skills-root"))
+	})
+	defer cleanup()
+
+	skillsRoot := filepath.Join(filepath.Dir(services.sessions.cfg.WorkspaceRoot), "skills-root")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skillsRoot) error = %v", err)
+	}
+
+	expectedPath := "/opt/daily-office/node_modules/.bin:/skills/scripts:/skills/docx/scripts:/skills/pptx/scripts:/skills/pdf/scripts:/skills/xlsx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		DefaultCwd:      "/workspace",
+		DefaultEnv: map[string]string{
+			"NODE_PATH": "/opt/daily-office/node_modules",
+			"PATH":      expectedPath,
+		},
+		Mounts: []model.Mount{{
+			Source:      skillsRoot,
+			Destination: "/skills",
+			ReadOnly:    true,
+		}},
+		Enabled: true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "daily-office-session",
+		EnvironmentName: "daily-office",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if fake.lastCreate.Env["NODE_PATH"] != "/opt/daily-office/node_modules" {
+		t.Fatalf("NODE_PATH = %q", fake.lastCreate.Env["NODE_PATH"])
+	}
+	if fake.lastCreate.Env["PATH"] != expectedPath {
+		t.Fatalf("PATH = %q", fake.lastCreate.Env["PATH"])
+	}
+	if len(created.Mounts) != 2 {
+		t.Fatalf("created mounts len = %d, want 2", len(created.Mounts))
+	}
+	if created.Mounts[0].Destination != "/skills" || !created.Mounts[0].ReadOnly {
+		t.Fatalf("skills mount = %+v", created.Mounts[0])
+	}
+	if created.Mounts[1].Destination != runtime.DefaultMountPath || created.Mounts[1].ReadOnly {
+		t.Fatalf("workspace mount = %+v", created.Mounts[1])
+	}
+}
+
 func TestCreateReturnsNotFoundWhenEnvironmentFileMissing(t *testing.T) {
 	t.Parallel()
 
@@ -683,7 +818,9 @@ type fakeRuntime struct {
 	lastCreate  runtime.CreateOptions
 	lastExec    runtime.ExecOptions
 	startCalls  int
+	lastBuild   runtime.BuildOptions
 	buildResult runtime.BuildResult
+	buildFiles  map[string]string
 	buildErr    error
 }
 
@@ -738,7 +875,32 @@ func (f *fakeRuntime) Exec(_ context.Context, containerID string, opts runtime.E
 	return f.execResult, nil
 }
 
-func (f *fakeRuntime) Build(_ context.Context, _ runtime.BuildOptions) (runtime.BuildResult, error) {
+func (f *fakeRuntime) Build(_ context.Context, opts runtime.BuildOptions) (runtime.BuildResult, error) {
+	f.mu.Lock()
+	f.lastBuild = opts
+	f.buildFiles = make(map[string]string)
+	err := filepath.Walk(opts.ContextDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(opts.ContextDir, path)
+		if relErr != nil {
+			return relErr
+		}
+		payload, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		f.buildFiles[rel] = string(payload)
+		return nil
+	})
+	f.mu.Unlock()
+	if err != nil {
+		return runtime.BuildResult{}, err
+	}
 	if f.buildResult.StartedAt.IsZero() {
 		now := time.Now().UTC()
 		f.buildResult.StartedAt = now

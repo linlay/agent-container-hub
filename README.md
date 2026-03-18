@@ -42,6 +42,11 @@ environment 可以内嵌 Dockerfile。调用构建接口后，服务会：
 
 构建失败不会丢失记录，失败的 `BuildJob` 会保留。
 
+内置环境：
+
+- `shell` -> `busybox:latest`
+- `daily-office` -> `daily-office:latest`
+
 ## 快速开始
 
 ### 前置要求
@@ -312,6 +317,15 @@ curl -X POST http://127.0.0.1:11960/api/environments \
 curl -X POST http://127.0.0.1:11960/api/environments/shell/build
 ```
 
+内置 `daily-office` 直接通过 environment YAML 中的内联 Dockerfile 构建镜像，运行时则依赖只读 `/skills` 挂载：
+
+```text
+/Users/linlay/Project/all-skills -> /skills
+```
+
+宿主机仍需要具备容器引擎权限，以及访问基础镜像、apt/pip/npm 源和 Himalaya 下载源的能力。
+另外，若要创建 `daily-office` session，需要把 `/Users/linlay/Project/all-skills` 加入 `ALLOWED_MOUNT_ROOTS`。
+
 ### Environment YAML
 
 environment 主数据不再保存在 `agent-container-hub.db` 中，而是以 YAML 文件形式维护在：
@@ -335,10 +349,28 @@ build:
     CMD ["/bin/sh"]
 ```
 
+`daily-office` 这类需要运行时技能目录挂载的环境，可以声明默认挂载与环境变量：
+
+```yaml
+mounts:
+  - source: /Users/linlay/Project/all-skills
+    destination: /skills
+    read_only: true
+default_env:
+  NODE_PATH: /opt/daily-office/node_modules
+  PATH: /opt/daily-office/node_modules/.bin:/skills/scripts:/skills/docx/scripts:/skills/pptx/scripts:/skills/pdf/scripts:/skills/xlsx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+build:
+  dockerfile: |
+    FROM python:3.12-slim-bookworm
+    ...
+```
+
 说明：
 
 - API 的 `POST/PUT /api/environments*` 会直接写入或覆盖对应 YAML 文件
 - 手工修改 YAML 后无需重启，后续读取会直接生效
+- `daily-office` 默认会把宿主机 `/Users/linlay/Project/all-skills` 只读挂载到容器内 `/skills`
+- `ALLOWED_MOUNT_ROOTS` 必须包含 `/Users/linlay/Project/all-skills`，否则 `daily-office` session 创建会被挂载白名单拒绝
 - `GET /api/environments` 遇到坏 YAML 会返回错误并带上文件名
 - `GET /api/environments/{name}`、创建 session、触发 build 只读取目标文件，不受无关坏文件影响
 - `GET /api/environments/{name}` 与管理站保存/选中环境后，会同时返回 YAML 预览文本

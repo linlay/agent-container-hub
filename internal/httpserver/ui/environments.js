@@ -4,6 +4,8 @@ const state = {
   environments: {
     items: [],
     selectedName: "",
+    selectedBuild: defaultBuild(),
+    selectedDetails: defaultEnvironmentDetails(),
   },
 };
 
@@ -18,6 +20,46 @@ function clearEnvironmentForm() {
   document.getElementById("cwd").value = "/workspace";
   document.getElementById("description").value = "";
   document.getElementById("dockerfile").value = "FROM busybox:latest\nCMD [\"/bin/sh\"]";
+  state.environments.selectedBuild = defaultBuild();
+  state.environments.selectedDetails = defaultEnvironmentDetails();
+}
+
+function defaultBuild() {
+  return {
+    dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]",
+    build_args: {},
+    notes: "",
+    smoke_command: "",
+    smoke_args: [],
+  };
+}
+
+function defaultEnvironmentDetails() {
+  return {
+    default_env: {},
+    mounts: [],
+    resources: { cpu: 0, memory_mb: 0, pids: 0 },
+    enabled: true,
+  };
+}
+
+function normalizeBuild(build) {
+  return {
+    ...defaultBuild(),
+    ...(build || {}),
+    build_args: { ...(build?.build_args || {}) },
+    smoke_args: Array.isArray(build?.smoke_args) ? [...build.smoke_args] : [],
+  };
+}
+
+function normalizeEnvironmentDetails(item) {
+  return {
+    ...defaultEnvironmentDetails(),
+    default_env: { ...(item?.default_env || {}) },
+    mounts: Array.isArray(item?.mounts) ? item.mounts.map((mount) => ({ ...mount })) : [],
+    resources: { ...defaultEnvironmentDetails().resources, ...(item?.resources || {}) },
+    enabled: item?.enabled ?? true,
+  };
 }
 
 async function refreshEnvironments(selectedName = "") {
@@ -67,7 +109,9 @@ async function selectEnvironment(name) {
   document.getElementById("tag").value = item.image_tag || "";
   document.getElementById("cwd").value = item.default_cwd || "/workspace";
   document.getElementById("description").value = item.description || "";
-  document.getElementById("dockerfile").value = item.build?.dockerfile || "";
+  state.environments.selectedBuild = normalizeBuild(item.build);
+  state.environments.selectedDetails = normalizeEnvironmentDetails(item);
+  document.getElementById("dockerfile").value = state.environments.selectedBuild.dockerfile || "";
   environmentOutput.textContent = item.last_build
     ? `Last build ${item.last_build.status} at ${item.last_build.started_at || "-"}`
     : "Environment loaded.";
@@ -76,16 +120,21 @@ async function selectEnvironment(name) {
 }
 
 function collectEnvironmentPayload() {
+  const build = {
+    ...normalizeBuild(state.environments.selectedBuild),
+    dockerfile: document.getElementById("dockerfile").value,
+  };
   return {
     name: document.getElementById("name").value.trim(),
     image_repository: document.getElementById("repository").value.trim(),
     image_tag: document.getElementById("tag").value.trim(),
     default_cwd: document.getElementById("cwd").value.trim(),
     description: document.getElementById("description").value.trim(),
-    enabled: true,
-    build: {
-      dockerfile: document.getElementById("dockerfile").value,
-    },
+    default_env: { ...state.environments.selectedDetails.default_env },
+    mounts: state.environments.selectedDetails.mounts.map((mount) => ({ ...mount })),
+    resources: { ...state.environments.selectedDetails.resources },
+    enabled: state.environments.selectedDetails.enabled,
+    build,
   };
 }
 
@@ -102,6 +151,8 @@ async function initialize() {
         method: "POST",
         body: JSON.stringify(collectEnvironmentPayload()),
       });
+      state.environments.selectedBuild = normalizeBuild(result.build);
+      state.environments.selectedDetails = normalizeEnvironmentDetails(result);
       environmentOutput.textContent = "Environment saved.";
       environmentYAML.textContent = result.yaml || "No YAML available.";
       await refreshEnvironments(result.name);
