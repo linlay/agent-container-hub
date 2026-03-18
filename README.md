@@ -437,7 +437,7 @@ make docker-build
   - 若配置了 smoke check，检查 `smoke_command` 和 `smoke_args`
 - 调用方无法工作
   - 检查是否已经切换到 `/api/sessions/*` 与 `/api/environments/*`
-  - 检查调用方配置的 `agent.tools.agent-container-hub.base-url`
+  - 检查调用方配置的 `agent.tools.container-hub.base-url`
 
 ## 升级说明
 

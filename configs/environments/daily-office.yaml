@@ -1,5 +1,5 @@
 name: daily-office
-description: Daily office runtime with inline image build and runtime-mounted skills under /skills.
+description: Daily office runtime with inline image build and optional runtime-mounted skills under /skills.
 image_repository: daily-office
 image_tag: latest
 default_cwd: /workspace
@@ -7,10 +7,6 @@ default_env:
   DAILY_OFFICE_HOME: /opt/daily-office
   NODE_PATH: /opt/daily-office/node_modules
   PATH: /opt/daily-office/node_modules/.bin:/skills/scripts:/skills/docx/scripts:/skills/pptx/scripts:/skills/pdf/scripts:/skills/xlsx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-mounts:
-  - source: /Users/linlay/Project/all-skills
-    destination: /skills
-    read_only: true
 enabled: true
 default_execute:
   command: /bin/bash
@@ -39,7 +35,7 @@ default_execute:
       ls /skills/ 2>/dev/null || echo '/skills not mounted'
   timeout_ms: 30000
 build:
-  notes: Runtime skills are mounted from /Users/linlay/Project/all-skills to /skills as read-only content.
+  notes: Runtime skills can be mounted to /skills as read-only content when a session explicitly adds that mount.
   dockerfile: |
     ARG PYTHON_BASE_IMAGE=python:3.12-slim-bookworm
     FROM ${PYTHON_BASE_IMAGE}
@@ -231,7 +227,6 @@ build:
 
     WORKDIR /workspace
 
-    ENTRYPOINT ["/bin/bash"]
   smoke_command: /bin/bash
   smoke_args:
     - -lc

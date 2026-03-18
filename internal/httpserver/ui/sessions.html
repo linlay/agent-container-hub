@@ -138,9 +138,13 @@
             <div class="toolbar wrap">
               <div>
                 <h3>Session Mounts</h3>
-                <div class="meta">Prefilled from the mount template root. You can add, edit, or remove rows before create. `/workspace` stays reserved for the auto workspace mount.</div>
+                <div class="meta">Mounts are only included when you add them here. Template mounts stay available as shortcuts, and `/workspace` stays reserved for the auto workspace mount.</div>
               </div>
               <div class="actions">
+                <select id="template-mount-select" aria-label="Template mount shortcut">
+                  <option value="">No template mounts available</option>
+                </select>
+                <button class="secondary" id="add-template-mount">Add Template Mount</button>
                 <button class="secondary" id="add-mount-row">Add Mount</button>
               </div>
             </div>

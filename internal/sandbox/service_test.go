@@ -638,7 +638,7 @@ func TestDailyOfficeBuildUsesInlineDockerfileAndPassesBuildArgs(t *testing.T) {
 	}
 }
 
-func TestDailyOfficeSessionIncludesSkillsMount(t *testing.T) {
+func TestDailyOfficeSessionAllowsExplicitSkillsMount(t *testing.T) {
 	t.Parallel()
 
 	services, cleanup, fake := newTestServices(t)
@@ -659,11 +659,6 @@ func TestDailyOfficeSessionIncludesSkillsMount(t *testing.T) {
 			"NODE_PATH": "/opt/daily-office/node_modules",
 			"PATH":      expectedPath,
 		},
-		Mounts: []model.Mount{{
-			Source:      skillsRoot,
-			Destination: "/skills",
-			ReadOnly:    true,
-		}},
 		Enabled: true,
 		Build: model.BuildSpec{
 			Dockerfile: "FROM busybox:latest\n",
@@ -675,6 +670,11 @@ func TestDailyOfficeSessionIncludesSkillsMount(t *testing.T) {
 	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
 		SessionID:       "daily-office-session",
 		EnvironmentName: "daily-office",
+		Mounts: []model.Mount{{
+			Source:      skillsRoot,
+			Destination: "/skills",
+			ReadOnly:    true,
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)

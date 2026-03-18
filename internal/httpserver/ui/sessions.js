@@ -34,6 +34,7 @@ const state = {
     selectedEnvironment: "",
     templateRoot: "",
     templateMounts: [],
+    selectedTemplateMount: "",
     chatIDs: [],
     attachChat: false,
     selectedChatID: "",
@@ -60,6 +61,8 @@ const createEnvironmentHint = document.getElementById("create-environment-hint")
 const createTemplateHint = document.getElementById("create-template-hint");
 const createSessionButton = document.getElementById("create-session");
 const createSessionMounts = document.getElementById("create-session-mounts");
+const templateMountSelect = document.getElementById("template-mount-select");
+const addTemplateMountButton = document.getElementById("add-template-mount");
 const refreshSessionsButton = document.getElementById("refresh-sessions");
 const executionHistory = document.getElementById("execution-history");
 const executionDetail = document.getElementById("execution-detail");
@@ -99,6 +102,42 @@ function cloneMount(mount, origin = "manual") {
   };
 }
 
+function templateMountKey(mount) {
+  return `${mount?.source || ""}::${mount?.destination || ""}`;
+}
+
+function availableTemplateMounts() {
+  const used = new Set(
+    state.createSession.mounts
+      .filter((mount) => mount.origin === "template")
+      .map((mount) => templateMountKey(mount)),
+  );
+  return state.createSession.templateMounts.filter((mount) => !used.has(templateMountKey(mount)));
+}
+
+function renderTemplateMountOptions() {
+  const mounts = availableTemplateMounts();
+  const selected = mounts.find((mount) => templateMountKey(mount) === state.createSession.selectedTemplateMount)
+    ? state.createSession.selectedTemplateMount
+    : (mounts[0] ? templateMountKey(mounts[0]) : "");
+
+  state.createSession.selectedTemplateMount = selected || "";
+  if (mounts.length === 0) {
+    templateMountSelect.innerHTML = `<option value="">No template mounts available</option>`;
+    templateMountSelect.disabled = true;
+    addTemplateMountButton.disabled = true;
+    return;
+  }
+
+  templateMountSelect.innerHTML = mounts.map((mount) => {
+    const key = templateMountKey(mount);
+    return `<option value="${escapeHTML(key)}">${escapeHTML(`${mount.destination} ← ${mount.source}`)}</option>`;
+  }).join("");
+  templateMountSelect.disabled = false;
+  addTemplateMountButton.disabled = false;
+  templateMountSelect.value = state.createSession.selectedTemplateMount;
+}
+
 function quickExecutePresetForEnvironment(environmentName) {
   return state.environmentsByName[environmentName]?.default_execute || {};
 }
@@ -128,8 +167,12 @@ async function refreshSessionCreateTemplate() {
   const data = await api("/api/session-create/template");
   state.createSession.templateRoot = data.mount_template_root || "";
   state.createSession.templateMounts = (data.default_mounts || []).map((mount) => cloneMount(mount, "template"));
+  state.createSession.selectedTemplateMount = state.createSession.templateMounts[0]
+    ? templateMountKey(state.createSession.templateMounts[0])
+    : "";
   state.createSession.chatIDs = Array.isArray(data.chat_ids) ? [...data.chat_ids] : [];
   renderChatOptions();
+  renderTemplateMountOptions();
   createTemplateHint.textContent = state.createSession.templateRoot
     ? `Template root: ${state.createSession.templateRoot}`
     : "No mount template root configured.";
@@ -193,7 +236,10 @@ function resetCreateSessionForm() {
   state.createSession.selectedEnvironment = preferredEnvironmentName();
   state.createSession.attachChat = false;
   state.createSession.selectedChatID = "";
-  state.createSession.mounts = state.createSession.templateMounts.map((mount) => ({ ...mount }));
+  state.createSession.selectedTemplateMount = state.createSession.templateMounts[0]
+    ? templateMountKey(state.createSession.templateMounts[0])
+    : "";
+  state.createSession.mounts = [];
   createEnvironmentSelect.value = state.createSession.selectedEnvironment || "";
   document.getElementById("create-session-id").value = "";
   renderChatOptions();
@@ -207,6 +253,16 @@ function addMountRow(origin = "manual") {
     read_only: false,
     origin,
   });
+  renderSessionMountEditor();
+}
+
+function addSelectedTemplateMount() {
+  const mount = state.createSession.templateMounts.find((item) => templateMountKey(item) === state.createSession.selectedTemplateMount);
+  if (!mount) {
+    showToast("Select a template mount to add.", "error");
+    return;
+  }
+  state.createSession.mounts.push({ ...mount });
   renderSessionMountEditor();
 }
 
@@ -224,8 +280,9 @@ function syncChatMount() {
 }
 
 function renderSessionMountEditor() {
+  renderTemplateMountOptions();
   if (state.createSession.mounts.length === 0) {
-    createSessionMounts.innerHTML = `<div class="empty">No session mounts yet. Use "Add Mount" to create one.</div>`;
+    createSessionMounts.innerHTML = `<div class="empty">No session mounts yet. Use "Add Template Mount" or "Add Mount" to create one.</div>`;
     return;
   }
 
@@ -697,6 +754,15 @@ async function initialize() {
   document.getElementById("add-mount-row").addEventListener("click", (event) => {
     event.preventDefault();
     addMountRow();
+  });
+
+  templateMountSelect.addEventListener("change", () => {
+    state.createSession.selectedTemplateMount = templateMountSelect.value;
+  });
+
+  addTemplateMountButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    addSelectedTemplateMount();
   });
 
   document.getElementById("open-create-session").addEventListener("click", async () => {

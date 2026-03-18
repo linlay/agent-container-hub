@@ -399,14 +399,11 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	}
 
 	dailyOffice := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/daily-office", nil, http.StatusOK, "")
-	if len(dailyOffice.Mounts) != 1 {
-		t.Fatalf("daily-office mounts len = %d, want 1", len(dailyOffice.Mounts))
-	}
 	if dailyOffice.DefaultExecute.Command != "/bin/bash" || len(dailyOffice.DefaultExecute.Args) != 2 || dailyOffice.DefaultExecute.TimeoutMS != 30000 {
 		t.Fatalf("daily-office default execute = %+v, want health-check preset", dailyOffice.DefaultExecute)
 	}
-	if dailyOffice.Mounts[0].Destination != "/skills" || !dailyOffice.Mounts[0].ReadOnly {
-		t.Fatalf("daily-office mount = %+v", dailyOffice.Mounts[0])
+	if len(dailyOffice.Mounts) != 0 {
+		t.Fatalf("daily-office mounts len = %d, want 0", len(dailyOffice.Mounts))
 	}
 	if dailyOffice.DefaultEnv["NODE_PATH"] != "/opt/daily-office/node_modules" {
 		t.Fatalf("daily-office NODE_PATH = %q", dailyOffice.DefaultEnv["NODE_PATH"])
@@ -416,6 +413,9 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	}
 	if bytes.Contains([]byte(dailyOffice.Build.Dockerfile), []byte("COPY ")) {
 		t.Fatalf("daily-office Dockerfile unexpectedly contains COPY")
+	}
+	if bytes.Contains([]byte(dailyOffice.Build.Dockerfile), []byte("ENTRYPOINT")) {
+		t.Fatalf("daily-office Dockerfile unexpectedly contains ENTRYPOINT")
 	}
 	if len(dailyOffice.Build.SmokeArgs) == 0 || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("python -c")) || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("node -e")) {
 		t.Fatalf("daily-office smoke args = %+v, want python/node import checks", dailyOffice.Build.SmokeArgs)
