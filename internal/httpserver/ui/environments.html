@@ -68,6 +68,31 @@
           <textarea id="description"></textarea>
         </label>
 
+        <div class="stack">
+          <div>
+            <h3>Quick Execute Preset</h3>
+            <div class="meta">This preset powers the quick execute action on the Sessions page.</div>
+          </div>
+
+          <div class="row">
+            <label>Command
+              <input id="default-execute-command" placeholder="pwd">
+            </label>
+            <label>Cwd
+              <input id="default-execute-cwd" placeholder="/workspace">
+            </label>
+          </div>
+
+          <div class="row">
+            <label>Timeout (ms)
+              <input id="default-execute-timeout" type="number" min="0" placeholder="30000">
+            </label>
+            <label>Args
+              <textarea id="default-execute-args" placeholder="One arg per line"></textarea>
+            </label>
+          </div>
+        </div>
+
         <label>Dockerfile
           <textarea id="dockerfile">FROM busybox:latest
 CMD ["/bin/sh"]</textarea>

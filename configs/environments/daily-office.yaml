@@ -12,6 +12,8 @@ mounts:
     destination: /skills
     read_only: true
 enabled: true
+default_execute:
+  command: pwd
 build:
   notes: Runtime skills are mounted from /Users/linlay/Project/all-skills to /skills as read-only content.
   dockerfile: |

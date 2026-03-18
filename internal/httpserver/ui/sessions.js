@@ -17,6 +17,7 @@ const state = {
     items: [],
     selectedID: "",
   },
+  environmentsByName: {},
   sessionDetail: null,
   executions: {
     sessionID: "",
@@ -29,6 +30,16 @@ const state = {
   createSession: {
     enabledEnvironments: [],
     selectedEnvironment: "",
+    templateRoot: "",
+    templateMounts: [],
+    chatIDs: [],
+    selectedChatID: "",
+    mounts: [],
+  },
+  quickExecute: {
+    sessionID: "",
+    environmentName: "",
+    preset: null,
   },
 };
 
@@ -39,12 +50,17 @@ const sessionPageMeta = document.getElementById("session-page-meta");
 const sessionDetailContent = document.getElementById("session-detail-content");
 const sessionCreateOutput = document.getElementById("session-create-output");
 const createEnvironmentSelect = document.getElementById("create-environment");
+const createChatIDSelect = document.getElementById("create-chat-id");
 const createEnvironmentHint = document.getElementById("create-environment-hint");
+const createTemplateHint = document.getElementById("create-template-hint");
 const createSessionButton = document.getElementById("create-session");
+const createSessionMounts = document.getElementById("create-session-mounts");
 const executionHistory = document.getElementById("execution-history");
 const executionDetail = document.getElementById("execution-detail");
 const executionPageMeta = document.getElementById("execution-page-meta");
 const executeModalMeta = document.getElementById("execute-modal-meta");
+const quickExecuteContent = document.getElementById("quick-execute-content");
+const quickExecuteOpenLogsButton = document.getElementById("quick-execute-open-logs");
 
 function buildSessionQueryString() {
   const params = new URLSearchParams({
@@ -68,6 +84,19 @@ function buildExecutionQueryString() {
   }).toString();
 }
 
+function cloneMount(mount, origin = "manual") {
+  return {
+    source: mount?.source || "",
+    destination: mount?.destination || "",
+    read_only: Boolean(mount?.read_only),
+    origin,
+  };
+}
+
+function quickExecutePresetForEnvironment(environmentName) {
+  return state.environmentsByName[environmentName]?.default_execute || {};
+}
+
 async function refreshSessions(preserveSelection = true) {
   const data = await api(`/api/sessions/query?${buildSessionQueryString()}`);
   state.sessions.items = data.items || [];
@@ -79,6 +108,183 @@ async function refreshSessions(preserveSelection = true) {
     state.sessions.selectedID = "";
   }
   renderSessionTable();
+}
+
+async function refreshEnvironmentMetadata(preferredName = "") {
+  const items = await api("/api/environments");
+  state.environmentsByName = Object.fromEntries((items || []).map((item) => [item.name, item]));
+  state.createSession.enabledEnvironments = (items || []).filter((item) => item.enabled);
+  renderCreateEnvironmentOptions(preferredName);
+  renderSessionTable();
+}
+
+async function refreshSessionCreateTemplate() {
+  const data = await api("/api/session-create/template");
+  state.createSession.templateRoot = data.mount_template_root || "";
+  state.createSession.templateMounts = (data.default_mounts || []).map((mount) => cloneMount(mount, "template"));
+  state.createSession.chatIDs = Array.isArray(data.chat_ids) ? [...data.chat_ids] : [];
+  renderChatOptions();
+  createTemplateHint.textContent = state.createSession.templateRoot
+    ? `Template root: ${state.createSession.templateRoot}`
+    : "No mount template root configured.";
+}
+
+function preferredEnvironmentName(fallbackName = "") {
+  const enabledNames = new Set(state.createSession.enabledEnvironments.map((item) => item.name));
+  if (fallbackName && enabledNames.has(fallbackName)) {
+    return fallbackName;
+  }
+  const filterEnvironment = state.sessions.filters.environment_name.trim();
+  if (filterEnvironment && enabledNames.has(filterEnvironment)) {
+    return filterEnvironment;
+  }
+  if (state.createSession.selectedEnvironment && enabledNames.has(state.createSession.selectedEnvironment)) {
+    return state.createSession.selectedEnvironment;
+  }
+  return state.createSession.enabledEnvironments[0]?.name || "";
+}
+
+function renderCreateEnvironmentOptions(preferredName = "") {
+  const enabledEnvironments = state.createSession.enabledEnvironments;
+  const selectedName = preferredEnvironmentName(preferredName);
+
+  if (enabledEnvironments.length === 0) {
+    createEnvironmentSelect.innerHTML = `<option value="">No enabled environments</option>`;
+    createEnvironmentSelect.disabled = true;
+    createSessionButton.disabled = true;
+    createEnvironmentHint.textContent = "No enabled environments available. Create or enable one from the Environments page first.";
+    state.createSession.selectedEnvironment = "";
+    return;
+  }
+
+  createEnvironmentSelect.innerHTML = enabledEnvironments.map((item) => `
+    <option value="${escapeHTML(item.name)}">${escapeHTML(item.name)} · ${escapeHTML(item.image_ref || "-")}</option>
+  `).join("");
+  createEnvironmentSelect.disabled = false;
+  createSessionButton.disabled = false;
+  createEnvironmentSelect.value = selectedName;
+  createEnvironmentHint.textContent = `${enabledEnvironments.length} enabled environment(s) available.`;
+  state.createSession.selectedEnvironment = selectedName;
+}
+
+function renderChatOptions() {
+  const options = [`<option value="">No /tmp chat mount</option>`];
+  for (const chatID of state.createSession.chatIDs) {
+    options.push(`<option value="${escapeHTML(chatID)}">${escapeHTML(chatID)}</option>`);
+  }
+  createChatIDSelect.innerHTML = options.join("");
+  createChatIDSelect.value = state.createSession.selectedChatID || "";
+}
+
+function resetCreateSessionForm() {
+  state.createSession.selectedEnvironment = preferredEnvironmentName();
+  state.createSession.selectedChatID = "";
+  state.createSession.mounts = state.createSession.templateMounts.map((mount) => ({ ...mount }));
+  createEnvironmentSelect.value = state.createSession.selectedEnvironment || "";
+  createChatIDSelect.value = "";
+  document.getElementById("create-session-id").value = "";
+  renderChatOptions();
+  renderSessionMountEditor();
+}
+
+function addMountRow(origin = "manual") {
+  state.createSession.mounts.push({
+    source: "",
+    destination: "",
+    read_only: false,
+    origin,
+  });
+  renderSessionMountEditor();
+}
+
+function syncChatMount() {
+  state.createSession.mounts = state.createSession.mounts.filter((mount) => mount.origin !== "chat");
+  if (state.createSession.selectedChatID && state.createSession.templateRoot) {
+    state.createSession.mounts.push({
+      source: `${state.createSession.templateRoot}/chats/${state.createSession.selectedChatID}`,
+      destination: "/tmp",
+      read_only: false,
+      origin: "chat",
+    });
+  }
+  renderSessionMountEditor();
+}
+
+function renderSessionMountEditor() {
+  if (state.createSession.mounts.length === 0) {
+    createSessionMounts.innerHTML = `<div class="empty">No session mounts yet. Use "Add Mount" to create one.</div>`;
+    return;
+  }
+
+  createSessionMounts.innerHTML = state.createSession.mounts.map((mount, index) => `
+    <div class="mount-editor">
+      <div class="mount-editor-head">
+        <span class="pill">${escapeHTML(mount.origin)}</span>
+        <button class="secondary" data-remove-mount="${index}">Remove</button>
+      </div>
+      <div class="row">
+        <label>Source
+          <input data-mount-field="source" data-mount-index="${index}" value="${escapeHTML(mount.source)}" placeholder="/host/path">
+        </label>
+        <label>Destination
+          <input data-mount-field="destination" data-mount-index="${index}" value="${escapeHTML(mount.destination)}" placeholder="/container/path">
+        </label>
+      </div>
+      <div class="row">
+        <label>Access
+          <select data-mount-field="read_only" data-mount-index="${index}">
+            <option value="false" ${mount.read_only ? "" : "selected"}>Read write</option>
+            <option value="true" ${mount.read_only ? "selected" : ""}>Read only</option>
+          </select>
+        </label>
+        <div class="meta">Review every mount before create. `/workspace` is reserved for the auto workspace mount.</div>
+      </div>
+    </div>
+  `).join("");
+
+  createSessionMounts.querySelectorAll("[data-mount-field]").forEach((node) => {
+    node.addEventListener("input", () => {
+      const index = Number(node.dataset.mountIndex);
+      const field = node.dataset.mountField;
+      if (!state.createSession.mounts[index]) {
+        return;
+      }
+      if (field === "read_only") {
+        state.createSession.mounts[index].read_only = node.value === "true";
+        return;
+      }
+      state.createSession.mounts[index][field] = node.value;
+    });
+    node.addEventListener("change", () => {
+      if (node.dataset.mountField === "read_only") {
+        const index = Number(node.dataset.mountIndex);
+        if (state.createSession.mounts[index]) {
+          state.createSession.mounts[index].read_only = node.value === "true";
+        }
+      }
+    });
+  });
+
+  createSessionMounts.querySelectorAll("[data-remove-mount]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.removeMount);
+      const mount = state.createSession.mounts[index];
+      state.createSession.mounts.splice(index, 1);
+      if (mount?.origin === "chat") {
+        state.createSession.selectedChatID = "";
+        createChatIDSelect.value = "";
+      }
+      renderSessionMountEditor();
+    });
+  });
+}
+
+function collectCreateMountPayload() {
+  return state.createSession.mounts.map((mount) => ({
+    source: mount.source.trim(),
+    destination: mount.destination.trim(),
+    read_only: Boolean(mount.read_only),
+  }));
 }
 
 function renderSessionTable() {
@@ -100,31 +306,36 @@ function renderSessionTable() {
     return;
   }
 
-  sessionTableBody.innerHTML = state.sessions.items.map((item) => `
-    <tr class="${state.sessions.selectedID === item.session_id ? "selected" : ""}" data-row-session-id="${escapeHTML(item.session_id)}">
-      <td>
-        <strong>${escapeHTML(item.session_id)}</strong>
-        <div class="cell-meta">${escapeHTML(item.container_id || "")}</div>
-      </td>
-      <td>${escapeHTML(item.environment_name)}</td>
-      <td>
-        <span class="pill ${item.status === "stopped" ? "stopped" : ""}">${escapeHTML(item.status || "-")}</span>
-      </td>
-      <td>
-        <strong>${escapeHTML(item.image || "-")}</strong>
-        <div class="cell-meta">${escapeHTML(item.cwd || "-")}</div>
-      </td>
-      <td>${escapeHTML(formatTime(item.created_at))}</td>
-      <td>${escapeHTML(formatTime(item.stopped_at))}</td>
-      <td>
-        <div class="actions">
-          <button class="ghost" data-action="view" data-session-id="${escapeHTML(item.session_id)}">View</button>
-          <button class="secondary" data-action="executions" data-session-id="${escapeHTML(item.session_id)}">Execute Logs</button>
-          ${item.status === "active" ? `<button class="danger" data-action="stop" data-session-id="${escapeHTML(item.session_id)}">Stop</button>` : ""}
-        </div>
-      </td>
-    </tr>
-  `).join("");
+  sessionTableBody.innerHTML = state.sessions.items.map((item) => {
+    const quickPreset = quickExecutePresetForEnvironment(item.environment_name);
+    const canQuickExecute = Boolean((quickPreset.command || "").trim());
+    return `
+      <tr class="${state.sessions.selectedID === item.session_id ? "selected" : ""}" data-row-session-id="${escapeHTML(item.session_id)}">
+        <td>
+          <strong>${escapeHTML(item.session_id)}</strong>
+          <div class="cell-meta">${escapeHTML(item.container_id || "")}</div>
+        </td>
+        <td>${escapeHTML(item.environment_name)}</td>
+        <td>
+          <span class="pill ${item.status === "stopped" ? "stopped" : ""}">${escapeHTML(item.status || "-")}</span>
+        </td>
+        <td>
+          <strong>${escapeHTML(item.image || "-")}</strong>
+          <div class="cell-meta">${escapeHTML(item.cwd || "-")}</div>
+        </td>
+        <td>${escapeHTML(formatTime(item.created_at))}</td>
+        <td>${escapeHTML(formatTime(item.stopped_at))}</td>
+        <td>
+          <div class="actions">
+            <button class="ghost" data-action="view" data-session-id="${escapeHTML(item.session_id)}">View</button>
+            <button class="secondary" data-action="quick-execute" data-session-id="${escapeHTML(item.session_id)}" data-environment-name="${escapeHTML(item.environment_name)}" ${canQuickExecute ? "" : "disabled"}>Quick Execute</button>
+            <button class="secondary" data-action="executions" data-session-id="${escapeHTML(item.session_id)}">Execute Logs</button>
+            ${item.status === "active" ? `<button class="danger" data-action="stop" data-session-id="${escapeHTML(item.session_id)}">Stop</button>` : ""}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join("");
 
   sessionTableBody.querySelectorAll("[data-row-session-id]").forEach((row) => {
     row.addEventListener("click", (event) => {
@@ -142,6 +353,10 @@ function renderSessionTable() {
       const action = button.dataset.action;
       if (action === "view") {
         await openSessionDetail(sessionID);
+        return;
+      }
+      if (action === "quick-execute") {
+        await quickExecuteSession(sessionID, button.dataset.environmentName);
         return;
       }
       if (action === "executions") {
@@ -171,13 +386,21 @@ function renderSessionDetail() {
     return;
   }
 
-  const mounts = (item.mounts || []).map((mount) => `
-    <div class="mount-item">
-      <div><strong>${escapeHTML(mount.destination || "-")}</strong></div>
-      <div class="meta">${escapeHTML(mount.source || "-")}</div>
-      <div class="meta">${mount.read_only ? "read only" : "read write"}</div>
-    </div>
-  `).join("") || `<div class="empty">No mounts recorded for this session.</div>`;
+  const mounts = (item.mounts || []).map((mount) => {
+    const kind = mount.destination === "/workspace" && mount.source === item.workspace_path
+      ? "workspace mount"
+      : "snapshot mount";
+    return `
+      <div class="mount-item">
+        <div class="toolbar">
+          <strong>${escapeHTML(mount.destination || "-")}</strong>
+          <span class="pill">${escapeHTML(kind)}</span>
+        </div>
+        <div class="meta">${escapeHTML(mount.source || "-")}</div>
+        <div class="meta">${mount.read_only ? "read only" : "read write"}</div>
+      </div>
+    `;
+  }).join("") || `<div class="empty">No mounts recorded for this session.</div>`;
 
   sessionDetailContent.innerHTML = `
     <div class="toolbar wrap">
@@ -205,7 +428,7 @@ function renderSessionDetail() {
     <div class="stack">
       <div>
         <h3>Mount Snapshot</h3>
-        <div class="meta">Includes environment mounts and the auto-mounted workspace path.</div>
+        <div class="meta">Shows the persisted session mount snapshot, including configured mounts and the auto workspace mount.</div>
       </div>
       <div class="mount-list">${mounts}</div>
     </div>
@@ -337,6 +560,74 @@ function renderExecuteLogs() {
   `;
 }
 
+function renderQuickExecuteResult(payload) {
+  if (payload.error) {
+    quickExecuteContent.innerHTML = `<div class="empty">${escapeHTML(payload.error)}</div>`;
+    return;
+  }
+  quickExecuteContent.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-box"><div class="meta">Session</div><strong>${escapeHTML(payload.sessionID)}</strong></div>
+      <div class="detail-box"><div class="meta">Environment</div><strong>${escapeHTML(payload.environmentName)}</strong></div>
+      <div class="detail-box"><div class="meta">Command</div><strong>${escapeHTML(payload.preset.command || "-")}</strong></div>
+      <div class="detail-box"><div class="meta">Cwd</div><strong>${escapeHTML(payload.preset.cwd || "(session default)")}</strong></div>
+      <div class="detail-box"><div class="meta">Timeout</div><strong>${escapeHTML(payload.preset.timeout_ms || 0)} ms</strong></div>
+      <div class="detail-box"><div class="meta">Exit Code</div><strong>${escapeHTML(payload.response.exit_code)}</strong></div>
+      <div class="detail-box"><div class="meta">Started At</div><strong>${escapeHTML(payload.response.started_at || "-")}</strong></div>
+      <div class="detail-box"><div class="meta">Duration</div><strong>${escapeHTML(payload.response.duration_ms)} ms</strong></div>
+    </div>
+
+    <div class="stack">
+      <div>
+        <h3>Args</h3>
+      </div>
+      <pre>${escapeHTML(JSON.stringify(payload.preset.args || [], null, 2))}</pre>
+    </div>
+
+    <div class="stack">
+      <div>
+        <h3>Stdout</h3>
+      </div>
+      <pre>${escapeHTML(payload.response.stdout || "")}</pre>
+    </div>
+
+    <div class="stack">
+      <div>
+        <h3>Stderr</h3>
+      </div>
+      <pre>${escapeHTML(payload.response.stderr || "")}</pre>
+    </div>
+  `;
+}
+
+async function quickExecuteSession(sessionID, environmentName) {
+  const preset = quickExecutePresetForEnvironment(environmentName);
+  state.quickExecute.sessionID = sessionID;
+  state.quickExecute.environmentName = environmentName;
+  state.quickExecute.preset = preset;
+  if (!(preset.command || "").trim()) {
+    renderQuickExecuteResult({ error: "No quick execute preset is configured for this environment." });
+    openModal("quick-execute-backdrop");
+    return;
+  }
+
+  try {
+    const response = await api(`/api/sessions/${sessionID}/execute`, {
+      method: "POST",
+      body: JSON.stringify({
+        command: preset.command,
+        args: preset.args || [],
+        cwd: preset.cwd || "",
+        timeout_ms: preset.timeout_ms || 0,
+      }),
+    });
+    renderQuickExecuteResult({ sessionID, environmentName, preset, response });
+  } catch (error) {
+    renderQuickExecuteResult({ error: error.message });
+  }
+  openModal("quick-execute-backdrop");
+}
+
 async function stopSession(sessionID, reopenDetail) {
   try {
     const result = await api(`/api/sessions/${sessionID}/stop`, { method: "POST", body: "{}" });
@@ -354,50 +645,6 @@ async function stopSession(sessionID, reopenDetail) {
   }
 }
 
-function preferredEnvironmentName(fallbackName = "") {
-  const enabledNames = new Set(state.createSession.enabledEnvironments.map((item) => item.name));
-  if (fallbackName && enabledNames.has(fallbackName)) {
-    return fallbackName;
-  }
-  const filterEnvironment = state.sessions.filters.environment_name.trim();
-  if (filterEnvironment && enabledNames.has(filterEnvironment)) {
-    return filterEnvironment;
-  }
-  if (state.createSession.selectedEnvironment && enabledNames.has(state.createSession.selectedEnvironment)) {
-    return state.createSession.selectedEnvironment;
-  }
-  return state.createSession.enabledEnvironments[0]?.name || "";
-}
-
-function renderCreateEnvironmentOptions(preferredName = "") {
-  const enabledEnvironments = state.createSession.enabledEnvironments;
-  const selectedName = preferredEnvironmentName(preferredName);
-
-  if (enabledEnvironments.length === 0) {
-    createEnvironmentSelect.innerHTML = `<option value="">No enabled environments</option>`;
-    createEnvironmentSelect.disabled = true;
-    createSessionButton.disabled = true;
-    createEnvironmentHint.textContent = "No enabled environments available. Create or enable one from the Environments page first.";
-    state.createSession.selectedEnvironment = "";
-    return;
-  }
-
-  createEnvironmentSelect.innerHTML = enabledEnvironments.map((item) => `
-    <option value="${escapeHTML(item.name)}">${escapeHTML(item.name)} · ${escapeHTML(item.image_ref || "-")}</option>
-  `).join("");
-  createEnvironmentSelect.disabled = false;
-  createSessionButton.disabled = false;
-  createEnvironmentSelect.value = selectedName;
-  createEnvironmentHint.textContent = `${enabledEnvironments.length} enabled environment(s) available.`;
-  state.createSession.selectedEnvironment = selectedName;
-}
-
-async function refreshCreateEnvironments(preferredName = "") {
-  const items = await api("/api/environments");
-  state.createSession.enabledEnvironments = (items || []).filter((item) => item.enabled);
-  renderCreateEnvironmentOptions(preferredName);
-}
-
 async function initialize() {
   initializeShell("sessions");
   bindModalDismiss();
@@ -406,19 +653,37 @@ async function initialize() {
     state.createSession.selectedEnvironment = createEnvironmentSelect.value;
   });
 
+  createChatIDSelect.addEventListener("change", () => {
+    state.createSession.selectedChatID = createChatIDSelect.value;
+    syncChatMount();
+  });
+
+  document.getElementById("add-mount-row").addEventListener("click", (event) => {
+    event.preventDefault();
+    addMountRow();
+  });
+
   document.getElementById("open-create-session").addEventListener("click", async () => {
     sessionCreateOutput.textContent = "No session created yet.";
     try {
-      await refreshCreateEnvironments();
+      await refreshEnvironmentMetadata();
+      await refreshSessionCreateTemplate();
+      resetCreateSessionForm();
     } catch (error) {
-      createEnvironmentHint.textContent = error.message;
+      createTemplateHint.textContent = error.message;
       sessionCreateOutput.textContent = error.message;
+      if (state.createSession.mounts.length === 0) {
+        renderSessionMountEditor();
+      }
     }
     openModal("create-session-backdrop");
   });
 
   document.getElementById("refresh-sessions").addEventListener("click", async () => {
-    await refreshSessions(true);
+    await Promise.all([
+      refreshSessions(true),
+      refreshEnvironmentMetadata(),
+    ]);
   });
 
   document.getElementById("apply-session-filter").addEventListener("click", async () => {
@@ -471,6 +736,7 @@ async function initialize() {
         body: JSON.stringify({
           environment_name: environmentName,
           session_id: document.getElementById("create-session-id").value.trim(),
+          mounts: collectCreateMountPayload(),
         }),
       });
       state.sessions.selectedID = result.session_id;
@@ -502,13 +768,22 @@ async function initialize() {
     }
   });
 
+  quickExecuteOpenLogsButton.addEventListener("click", async () => {
+    if (!state.quickExecute.sessionID) {
+      return;
+    }
+    closeModal("quick-execute-backdrop");
+    await openExecuteLogs(state.quickExecute.sessionID);
+  });
+
   await Promise.all([
     refreshSessions(false),
-    refreshCreateEnvironments(),
+    refreshEnvironmentMetadata(),
   ]);
 }
 
 initialize().catch((error) => {
   createEnvironmentHint.textContent = error.message;
+  createTemplateHint.textContent = error.message;
   sessionCreateOutput.textContent = error.message;
 });

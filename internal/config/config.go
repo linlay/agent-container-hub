@@ -10,17 +10,18 @@ import (
 )
 
 type Config struct {
-	BindAddr              string
-	AuthToken             string
-	StateDBPath           string
-	ConfigRoot            string
-	WorkspaceRoot         string
-	BuildRoot             string
-	Engine                string
-	AllowedMountRoots     []string
-	DefaultCommandTimeout time.Duration
-	EnableExecLogPersist  bool
-	ExecLogMaxOutputBytes int
+	BindAddr                 string
+	AuthToken                string
+	StateDBPath              string
+	ConfigRoot               string
+	WorkspaceRoot            string
+	BuildRoot                string
+	SessionMountTemplateRoot string
+	Engine                   string
+	AllowedMountRoots        []string
+	DefaultCommandTimeout    time.Duration
+	EnableExecLogPersist     bool
+	ExecLogMaxOutputBytes    int
 }
 
 func Load() (Config, error) {
@@ -29,16 +30,17 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("getwd: %w", err)
 	}
 	cfg := Config{
-		BindAddr:              getEnv("BIND_ADDR", "127.0.0.1:8080"),
-		AuthToken:             strings.TrimSpace(os.Getenv("AUTH_TOKEN")),
-		StateDBPath:           getEnv("STATE_DB_PATH", filepath.Join(cwd, "data", "agent-container-hub.db")),
-		ConfigRoot:            getEnv("CONFIG_ROOT", filepath.Join(cwd, "configs")),
-		WorkspaceRoot:         getEnv("WORKSPACE_ROOT", filepath.Join(cwd, "data", "workspaces")),
-		BuildRoot:             getEnv("BUILD_ROOT", filepath.Join(cwd, "data", "builds")),
-		Engine:                firstNonEmpty(strings.TrimSpace(os.Getenv("ENGINE")), strings.TrimSpace(os.Getenv("RUNTIME"))),
-		DefaultCommandTimeout: getEnvDuration("DEFAULT_COMMAND_TIMEOUT", 30*time.Second),
-		EnableExecLogPersist:  getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
-		ExecLogMaxOutputBytes: getEnvInt("EXEC_LOG_MAX_OUTPUT_BYTES", 65536),
+		BindAddr:                 getEnv("BIND_ADDR", "127.0.0.1:8080"),
+		AuthToken:                strings.TrimSpace(os.Getenv("AUTH_TOKEN")),
+		StateDBPath:              getEnv("STATE_DB_PATH", filepath.Join(cwd, "data", "agent-container-hub.db")),
+		ConfigRoot:               getEnv("CONFIG_ROOT", filepath.Join(cwd, "configs")),
+		WorkspaceRoot:            getEnv("WORKSPACE_ROOT", filepath.Join(cwd, "data", "workspaces")),
+		BuildRoot:                getEnv("BUILD_ROOT", filepath.Join(cwd, "data", "builds")),
+		SessionMountTemplateRoot: getEnv("SESSION_MOUNT_TEMPLATE_ROOT", "/Users/linlay/Project/zenmind-env"),
+		Engine:                   firstNonEmpty(strings.TrimSpace(os.Getenv("ENGINE")), strings.TrimSpace(os.Getenv("RUNTIME"))),
+		DefaultCommandTimeout:    getEnvDuration("DEFAULT_COMMAND_TIMEOUT", 30*time.Second),
+		EnableExecLogPersist:     getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
+		ExecLogMaxOutputBytes:    getEnvInt("EXEC_LOG_MAX_OUTPUT_BYTES", 65536),
 	}
 	allowedRoots := strings.TrimSpace(os.Getenv("ALLOWED_MOUNT_ROOTS"))
 	if allowedRoots == "" {
@@ -64,12 +66,16 @@ func Load() (Config, error) {
 	if cfg.BuildRoot, err = absolutePath(cfg.BuildRoot); err != nil {
 		return Config{}, fmt.Errorf("normalize build root: %w", err)
 	}
+	if cfg.SessionMountTemplateRoot, err = absolutePath(cfg.SessionMountTemplateRoot); err != nil {
+		return Config{}, fmt.Errorf("normalize session mount template root: %w", err)
+	}
 	for i, root := range cfg.AllowedMountRoots {
 		cfg.AllowedMountRoots[i], err = absolutePath(root)
 		if err != nil {
 			return Config{}, fmt.Errorf("normalize allowed mount root %q: %w", root, err)
 		}
 	}
+	cfg.AllowedMountRoots = appendUniquePath(cfg.AllowedMountRoots, cfg.SessionMountTemplateRoot)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -157,4 +163,17 @@ func absolutePath(path string) (string, error) {
 		return "", nil
 	}
 	return filepath.Abs(path)
+}
+
+func appendUniquePath(paths []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return paths
+	}
+	for _, path := range paths {
+		if path == value {
+			return paths
+		}
+	}
+	return append(paths, value)
 }

@@ -289,6 +289,92 @@ func TestEnvironmentAPIResponsePreservesBuildMetadata(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAPIRoundTripsDefaultExecute(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	saved := doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		DefaultExecute: model.ExecutePreset{
+			Command:   "pwd",
+			Args:      []string{"-L"},
+			Cwd:       "/workspace",
+			TimeoutMS: 1234,
+		},
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	if saved.DefaultExecute.Command != "pwd" || len(saved.DefaultExecute.Args) != 1 || saved.DefaultExecute.TimeoutMS != 1234 {
+		t.Fatalf("saved.DefaultExecute = %+v", saved.DefaultExecute)
+	}
+
+	listed := doJSON[[]api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments", nil, http.StatusOK, "")
+	if len(listed) != 1 || listed[0].DefaultExecute.Command != "pwd" {
+		t.Fatalf("listed default execute = %+v", listed)
+	}
+}
+
+func TestSessionCreateTemplateEndpoint(t *testing.T) {
+	t.Parallel()
+
+	handler, cfg := newTestHandlerWithConfig(t, "")
+	for _, dir := range []string{"home", "pan", "skills", filepath.Join("chats", "chat-1"), filepath.Join("chats", "chat-2")} {
+		if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+
+	template := doJSON[api.SessionCreateTemplateResponse](t, handler, http.MethodGet, "/api/session-create/template", nil, http.StatusOK, "")
+	if template.MountTemplateRoot != cfg.SessionMountTemplateRoot {
+		t.Fatalf("MountTemplateRoot = %q, want %q", template.MountTemplateRoot, cfg.SessionMountTemplateRoot)
+	}
+	if len(template.DefaultMounts) != 3 {
+		t.Fatalf("default mounts len = %d, want 3", len(template.DefaultMounts))
+	}
+	if len(template.ChatIDs) != 2 {
+		t.Fatalf("chat IDs len = %d, want 2", len(template.ChatIDs))
+	}
+}
+
+func TestCreateSessionEndpointAcceptsMounts(t *testing.T) {
+	t.Parallel()
+
+	handler, cfg := newTestHandlerWithConfig(t, "")
+	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "home"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(home) error = %v", err)
+	}
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	created := doJSON[api.CreateSessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+		SessionID:       "with-mounts",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      filepath.Join(cfg.SessionMountTemplateRoot, "home"),
+			Destination: "/home",
+		}},
+	}, http.StatusOK, "")
+	if len(created.Mounts) != 2 {
+		t.Fatalf("created mounts len = %d, want 2", len(created.Mounts))
+	}
+	if created.Mounts[0].Destination != "/home" {
+		t.Fatalf("created mount = %+v, want /home first", created.Mounts[0])
+	}
+}
+
 func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	t.Parallel()
 
@@ -315,6 +401,9 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	dailyOffice := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/daily-office", nil, http.StatusOK, "")
 	if len(dailyOffice.Mounts) != 1 {
 		t.Fatalf("daily-office mounts len = %d, want 1", len(dailyOffice.Mounts))
+	}
+	if dailyOffice.DefaultExecute.Command != "pwd" {
+		t.Fatalf("daily-office default execute = %+v, want pwd", dailyOffice.DefaultExecute)
 	}
 	if dailyOffice.Mounts[0].Destination != "/skills" || !dailyOffice.Mounts[0].ReadOnly {
 		t.Fatalf("daily-office mount = %+v", dailyOffice.Mounts[0])
@@ -373,16 +462,17 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 
 	tempDir := t.TempDir()
 	cfg := config.Config{
-		BindAddr:              "127.0.0.1:0",
-		AuthToken:             authToken,
-		StateDBPath:           filepath.Join(tempDir, "agent-container-hub.db"),
-		ConfigRoot:            filepath.Join(tempDir, "configs"),
-		WorkspaceRoot:         filepath.Join(tempDir, "workspaces"),
-		BuildRoot:             filepath.Join(tempDir, "builds"),
-		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
-		DefaultCommandTimeout: time.Second,
-		EnableExecLogPersist:  true,
-		ExecLogMaxOutputBytes: 65536,
+		BindAddr:                 "127.0.0.1:0",
+		AuthToken:                authToken,
+		StateDBPath:              filepath.Join(tempDir, "agent-container-hub.db"),
+		ConfigRoot:               filepath.Join(tempDir, "configs"),
+		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
+		BuildRoot:                filepath.Join(tempDir, "builds"),
+		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
+		AllowedMountRoots:        []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds"), filepath.Join(tempDir, "zenmind-env")},
+		DefaultCommandTimeout:    time.Second,
+		EnableExecLogPersist:     true,
+		ExecLogMaxOutputBytes:    65536,
 	}
 	return newHandlerForConfig(t, cfg)
 }
@@ -392,16 +482,17 @@ func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Ha
 
 	tempDir := t.TempDir()
 	cfg := config.Config{
-		BindAddr:              "127.0.0.1:0",
-		AuthToken:             authToken,
-		StateDBPath:           filepath.Join(tempDir, "agent-container-hub.db"),
-		ConfigRoot:            configRoot,
-		WorkspaceRoot:         filepath.Join(tempDir, "workspaces"),
-		BuildRoot:             filepath.Join(tempDir, "builds"),
-		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
-		DefaultCommandTimeout: time.Second,
-		EnableExecLogPersist:  true,
-		ExecLogMaxOutputBytes: 65536,
+		BindAddr:                 "127.0.0.1:0",
+		AuthToken:                authToken,
+		StateDBPath:              filepath.Join(tempDir, "agent-container-hub.db"),
+		ConfigRoot:               configRoot,
+		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
+		BuildRoot:                filepath.Join(tempDir, "builds"),
+		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
+		AllowedMountRoots:        []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds"), filepath.Join(tempDir, "zenmind-env")},
+		DefaultCommandTimeout:    time.Second,
+		EnableExecLogPersist:     true,
+		ExecLogMaxOutputBytes:    65536,
 	}
 	handler, _ := newHandlerForConfig(t, cfg)
 	return handler
@@ -415,6 +506,9 @@ func newHandlerForConfig(t *testing.T, cfg config.Config) (http.Handler, config.
 	}
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(builds) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "chats"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(session mount template root) error = %v", err)
 	}
 	st, err := store.Open(cfg.StateDBPath)
 	if err != nil {

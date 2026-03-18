@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -70,9 +72,6 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 	if !environment.Enabled {
 		return nil, fmt.Errorf("%w: environment is disabled", ErrValidation)
 	}
-	if err := s.validateMounts(environment.Mounts); err != nil {
-		return nil, err
-	}
 
 	sessionID := strings.TrimSpace(req.SessionID)
 	if sessionID == "" {
@@ -103,11 +102,11 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		return nil, fmt.Errorf("create workspace: %w", err)
 	}
 
-	mounts := append([]model.Mount(nil), environment.Mounts...)
-	mounts = append(mounts, model.Mount{
-		Source:      workspacePath,
-		Destination: runtime.DefaultMountPath,
-	})
+	mounts, err := s.buildSessionMounts(environment.Mounts, req.Mounts, workspacePath)
+	if err != nil {
+		_ = os.RemoveAll(workspacePath)
+		return nil, err
+	}
 
 	containerLabels := cloneMap(req.Labels)
 	if containerLabels == nil {
@@ -165,6 +164,59 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 	if started.State != runtime.ContainerRunning {
 		s.logger.Warn("session started with non-running state", "session_id", session.ID, "state", started.State)
 	}
+	return response, nil
+}
+
+func (s *SessionService) CreateTemplate(context.Context) (*api.SessionCreateTemplateResponse, error) {
+	root := strings.TrimSpace(s.cfg.SessionMountTemplateRoot)
+	response := &api.SessionCreateTemplateResponse{
+		MountTemplateRoot: root,
+		DefaultMounts:     []model.Mount{},
+		ChatIDs:           []string{},
+	}
+	if root == "" {
+		return response, nil
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("read session mount template root: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || name == "chats" {
+			continue
+		}
+		response.DefaultMounts = append(response.DefaultMounts, model.Mount{
+			Source:      filepath.Join(root, name),
+			Destination: "/" + name,
+		})
+	}
+	sort.Slice(response.DefaultMounts, func(i, j int) bool {
+		return response.DefaultMounts[i].Destination < response.DefaultMounts[j].Destination
+	})
+
+	chatEntries, err := os.ReadDir(filepath.Join(root, "chats"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return response, nil
+		}
+		return nil, fmt.Errorf("read session mount template chats: %w", err)
+	}
+	for _, entry := range chatEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+		response.ChatIDs = append(response.ChatIDs, name)
+	}
+	sort.Strings(response.ChatIDs)
 	return response, nil
 }
 
@@ -449,6 +501,70 @@ func (s *SessionService) validateMounts(mounts []model.Mount) error {
 	return nil
 }
 
+func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []model.Mount, workspacePath string) ([]model.Mount, error) {
+	normalizedEnvMounts, err := s.normalizeMountList(environmentMounts)
+	if err != nil {
+		return nil, err
+	}
+	normalizedRequestMounts, err := s.normalizeMountList(requestMounts)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateMounts(normalizedEnvMounts); err != nil {
+		return nil, err
+	}
+	if err := s.validateMounts(normalizedRequestMounts); err != nil {
+		return nil, err
+	}
+
+	workspaceMount := model.Mount{
+		Source:      runtime.NormalizeMountSource(workspacePath),
+		Destination: runtime.DefaultMountPath,
+	}
+
+	destinations := map[string]struct{}{
+		workspaceMount.Destination: {},
+	}
+	for _, mount := range normalizedEnvMounts {
+		if err := validateMountDestination(mount.Destination, destinations); err != nil {
+			return nil, err
+		}
+	}
+	for _, mount := range normalizedRequestMounts {
+		if mount.Destination == runtime.DefaultMountPath {
+			return nil, fmt.Errorf("%w: mount destination %s is reserved for the workspace", ErrValidation, runtime.DefaultMountPath)
+		}
+		if err := validateMountDestination(mount.Destination, destinations); err != nil {
+			return nil, err
+		}
+	}
+
+	mounts := append([]model.Mount(nil), normalizedEnvMounts...)
+	mounts = append(mounts, normalizedRequestMounts...)
+	mounts = append(mounts, workspaceMount)
+	return mounts, nil
+}
+
+func (s *SessionService) normalizeMountList(mounts []model.Mount) ([]model.Mount, error) {
+	normalized := make([]model.Mount, 0, len(mounts))
+	for _, mount := range mounts {
+		source := strings.TrimSpace(mount.Source)
+		if source == "" {
+			return nil, fmt.Errorf("%w: mount source is required", ErrValidation)
+		}
+		destination := normalizeContainerPath(mount.Destination)
+		if destination == "" {
+			return nil, fmt.Errorf("%w: mount destination is required", ErrValidation)
+		}
+		normalized = append(normalized, model.Mount{
+			Source:      runtime.NormalizeMountSource(source),
+			Destination: destination,
+			ReadOnly:    mount.ReadOnly,
+		})
+	}
+	return normalized, nil
+}
+
 func (s *SessionService) inspectSession(ctx context.Context, session *model.Session) (runtime.ContainerInfo, error) {
 	info, err := s.runtime.Inspect(ctx, session.ID)
 	if err == nil {
@@ -479,6 +595,26 @@ func timeoutFor(timeoutMS int64, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(timeoutMS) * time.Millisecond
+}
+
+func validateMountDestination(destination string, seen map[string]struct{}) error {
+	if _, exists := seen[destination]; exists {
+		return fmt.Errorf("%w: mount destination %s is duplicated", ErrValidation, destination)
+	}
+	seen[destination] = struct{}{}
+	return nil
+}
+
+func normalizeContainerPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	clean := path.Clean(value)
+	if clean == "." {
+		return ""
+	}
+	return clean
 }
 
 func sessionDefaultCwd(cwd string) string {

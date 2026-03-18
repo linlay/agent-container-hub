@@ -25,6 +25,13 @@ type BuildSpec struct {
 	SmokeArgs    []string          `json:"smoke_args,omitempty" yaml:"smoke_args,omitempty"`
 }
 
+type ExecutePreset struct {
+	Command   string   `json:"command,omitempty" yaml:"command,omitempty"`
+	Args      []string `json:"args,omitempty" yaml:"args,omitempty"`
+	Cwd       string   `json:"cwd,omitempty" yaml:"cwd,omitempty"`
+	TimeoutMS int64    `json:"timeout_ms,omitempty" yaml:"timeout_ms,omitempty"`
+}
+
 type Environment struct {
 	Name            string            `json:"name" yaml:"name"`
 	Description     string            `json:"description,omitempty" yaml:"description,omitempty"`
@@ -35,6 +42,7 @@ type Environment struct {
 	Mounts          []Mount           `json:"mounts,omitempty" yaml:"mounts,omitempty"`
 	Resources       ResourceSpec      `json:"resources" yaml:"resources"`
 	Enabled         bool              `json:"enabled" yaml:"enabled"`
+	DefaultExecute  ExecutePreset     `json:"default_execute,omitempty" yaml:"default_execute,omitempty"`
 	Build           BuildSpec         `json:"build" yaml:"build"`
 	CreatedAt       time.Time         `json:"created_at" yaml:"-"`
 	UpdatedAt       time.Time         `json:"updated_at" yaml:"-"`
@@ -47,6 +55,7 @@ func (e *Environment) Clone() *Environment {
 	cp := *e
 	cp.DefaultEnv = cloneMap(e.DefaultEnv)
 	cp.Mounts = append([]Mount(nil), e.Mounts...)
+	cp.DefaultExecute = e.DefaultExecute.Clone()
 	cp.Build = e.Build.Clone()
 	return &cp
 }
@@ -70,6 +79,12 @@ func (b BuildSpec) Clone() BuildSpec {
 	cp := b
 	cp.BuildArgs = cloneMap(b.BuildArgs)
 	cp.SmokeArgs = append([]string(nil), b.SmokeArgs...)
+	return cp
+}
+
+func (p ExecutePreset) Clone() ExecutePreset {
+	cp := p
+	cp.Args = append([]string(nil), p.Args...)
 	return cp
 }
 

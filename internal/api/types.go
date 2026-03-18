@@ -10,6 +10,7 @@ type CreateSessionRequest struct {
 	SessionID       string            `json:"session_id"`
 	EnvironmentName string            `json:"environment_name"`
 	Labels          map[string]string `json:"labels"`
+	Mounts          []model.Mount     `json:"mounts"`
 }
 
 type ExecuteSessionRequest struct {
@@ -62,6 +63,12 @@ type SessionExecutionListResponse struct {
 	PageSize int                         `json:"page_size"`
 }
 
+type SessionCreateTemplateResponse struct {
+	MountTemplateRoot string        `json:"mount_template_root"`
+	DefaultMounts     []model.Mount `json:"default_mounts"`
+	ChatIDs           []string      `json:"chat_ids"`
+}
+
 type CreateSessionResponse struct {
 	SessionResponse
 	DurationMS int64 `json:"duration_ms"`
@@ -89,34 +96,36 @@ type SessionResponse struct {
 }
 
 type UpsertEnvironmentRequest struct {
-	Name            string             `json:"name"`
-	Description     string             `json:"description"`
-	ImageRepository string             `json:"image_repository"`
-	ImageTag        string             `json:"image_tag"`
-	DefaultCwd      string             `json:"default_cwd"`
-	DefaultEnv      map[string]string  `json:"default_env"`
-	Mounts          []model.Mount      `json:"mounts"`
-	Resources       model.ResourceSpec `json:"resources"`
-	Enabled         bool               `json:"enabled"`
-	Build           model.BuildSpec    `json:"build"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	ImageRepository string              `json:"image_repository"`
+	ImageTag        string              `json:"image_tag"`
+	DefaultCwd      string              `json:"default_cwd"`
+	DefaultEnv      map[string]string   `json:"default_env"`
+	Mounts          []model.Mount       `json:"mounts"`
+	Resources       model.ResourceSpec  `json:"resources"`
+	Enabled         bool                `json:"enabled"`
+	DefaultExecute  model.ExecutePreset `json:"default_execute"`
+	Build           model.BuildSpec     `json:"build"`
 }
 
 type EnvironmentResponse struct {
-	Name            string             `json:"name"`
-	Description     string             `json:"description,omitempty"`
-	ImageRepository string             `json:"image_repository"`
-	ImageTag        string             `json:"image_tag"`
-	ImageRef        string             `json:"image_ref"`
-	DefaultCwd      string             `json:"default_cwd"`
-	DefaultEnv      map[string]string  `json:"default_env,omitempty"`
-	Mounts          []model.Mount      `json:"mounts,omitempty"`
-	Resources       model.ResourceSpec `json:"resources"`
-	Enabled         bool               `json:"enabled"`
-	Build           model.BuildSpec    `json:"build"`
-	CreatedAt       time.Time          `json:"created_at"`
-	UpdatedAt       time.Time          `json:"updated_at"`
-	LastBuild       *BuildJobResponse  `json:"last_build,omitempty"`
-	YAML            string             `json:"yaml,omitempty"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description,omitempty"`
+	ImageRepository string              `json:"image_repository"`
+	ImageTag        string              `json:"image_tag"`
+	ImageRef        string              `json:"image_ref"`
+	DefaultCwd      string              `json:"default_cwd"`
+	DefaultEnv      map[string]string   `json:"default_env,omitempty"`
+	Mounts          []model.Mount       `json:"mounts,omitempty"`
+	Resources       model.ResourceSpec  `json:"resources"`
+	Enabled         bool                `json:"enabled"`
+	DefaultExecute  model.ExecutePreset `json:"default_execute,omitempty"`
+	Build           model.BuildSpec     `json:"build"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	LastBuild       *BuildJobResponse   `json:"last_build,omitempty"`
+	YAML            string              `json:"yaml,omitempty"`
 }
 
 type BuildEnvironmentRequest struct{}

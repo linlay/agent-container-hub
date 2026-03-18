@@ -6,6 +6,7 @@ const state = {
     selectedName: "",
     selectedBuild: defaultBuild(),
     selectedDetails: defaultEnvironmentDetails(),
+    selectedDefaultExecute: defaultExecutePreset(),
   },
 };
 
@@ -19,9 +20,14 @@ function clearEnvironmentForm() {
   document.getElementById("tag").value = "";
   document.getElementById("cwd").value = "/workspace";
   document.getElementById("description").value = "";
+  document.getElementById("default-execute-command").value = "";
+  document.getElementById("default-execute-cwd").value = "";
+  document.getElementById("default-execute-timeout").value = "";
+  document.getElementById("default-execute-args").value = "";
   document.getElementById("dockerfile").value = "FROM busybox:latest\nCMD [\"/bin/sh\"]";
   state.environments.selectedBuild = defaultBuild();
   state.environments.selectedDetails = defaultEnvironmentDetails();
+  state.environments.selectedDefaultExecute = defaultExecutePreset();
 }
 
 function defaultBuild() {
@@ -43,6 +49,15 @@ function defaultEnvironmentDetails() {
   };
 }
 
+function defaultExecutePreset() {
+  return {
+    command: "",
+    args: [],
+    cwd: "",
+    timeout_ms: 0,
+  };
+}
+
 function normalizeBuild(build) {
   return {
     ...defaultBuild(),
@@ -59,6 +74,14 @@ function normalizeEnvironmentDetails(item) {
     mounts: Array.isArray(item?.mounts) ? item.mounts.map((mount) => ({ ...mount })) : [],
     resources: { ...defaultEnvironmentDetails().resources, ...(item?.resources || {}) },
     enabled: item?.enabled ?? true,
+  };
+}
+
+function normalizeExecutePreset(preset) {
+  return {
+    ...defaultExecutePreset(),
+    ...(preset || {}),
+    args: Array.isArray(preset?.args) ? [...preset.args] : [],
   };
 }
 
@@ -111,6 +134,11 @@ async function selectEnvironment(name) {
   document.getElementById("description").value = item.description || "";
   state.environments.selectedBuild = normalizeBuild(item.build);
   state.environments.selectedDetails = normalizeEnvironmentDetails(item);
+  state.environments.selectedDefaultExecute = normalizeExecutePreset(item.default_execute);
+  document.getElementById("default-execute-command").value = state.environments.selectedDefaultExecute.command || "";
+  document.getElementById("default-execute-cwd").value = state.environments.selectedDefaultExecute.cwd || "";
+  document.getElementById("default-execute-timeout").value = state.environments.selectedDefaultExecute.timeout_ms || "";
+  document.getElementById("default-execute-args").value = state.environments.selectedDefaultExecute.args.join("\n");
   document.getElementById("dockerfile").value = state.environments.selectedBuild.dockerfile || "";
   environmentOutput.textContent = item.last_build
     ? `Last build ${item.last_build.status} at ${item.last_build.started_at || "-"}`
@@ -124,6 +152,15 @@ function collectEnvironmentPayload() {
     ...normalizeBuild(state.environments.selectedBuild),
     dockerfile: document.getElementById("dockerfile").value,
   };
+  const defaultExecute = normalizeExecutePreset({
+    command: document.getElementById("default-execute-command").value.trim(),
+    cwd: document.getElementById("default-execute-cwd").value.trim(),
+    timeout_ms: Number(document.getElementById("default-execute-timeout").value) || 0,
+    args: document.getElementById("default-execute-args").value
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  });
   return {
     name: document.getElementById("name").value.trim(),
     image_repository: document.getElementById("repository").value.trim(),
@@ -134,6 +171,7 @@ function collectEnvironmentPayload() {
     mounts: state.environments.selectedDetails.mounts.map((mount) => ({ ...mount })),
     resources: { ...state.environments.selectedDetails.resources },
     enabled: state.environments.selectedDetails.enabled,
+    default_execute: defaultExecute,
     build,
   };
 }
@@ -153,6 +191,7 @@ async function initialize() {
       });
       state.environments.selectedBuild = normalizeBuild(result.build);
       state.environments.selectedDetails = normalizeEnvironmentDetails(result);
+      state.environments.selectedDefaultExecute = normalizeExecutePreset(result.default_execute);
       environmentOutput.textContent = "Environment saved.";
       environmentYAML.textContent = result.yaml || "No YAML available.";
       await refreshEnvironments(result.name);

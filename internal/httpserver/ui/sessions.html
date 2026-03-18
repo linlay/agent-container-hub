@@ -94,11 +94,11 @@
   </main>
 
   <div class="modal-backdrop" id="create-session-backdrop">
-    <div class="modal narrow">
+    <div class="modal">
       <div class="modal-header">
         <div>
           <h2>Create Session</h2>
-          <div class="meta">Create a new active session from an enabled registered environment.</div>
+          <div class="meta">Create a new active session from an enabled registered environment with editable session mounts.</div>
         </div>
         <button class="secondary modal-close" data-close-modal="create-session-backdrop">Close</button>
       </div>
@@ -111,7 +111,32 @@
             <input id="create-session-id" placeholder="optional-session-id">
           </label>
         </div>
-        <div class="meta" id="create-environment-hint">Loading enabled environments...</div>
+
+        <div class="row">
+          <label>Chat ID Mount
+            <select id="create-chat-id">
+              <option value="">No /tmp chat mount</option>
+            </select>
+          </label>
+          <div class="stack">
+            <div class="meta" id="create-environment-hint">Loading enabled environments...</div>
+            <div class="meta" id="create-template-hint">Loading mount template...</div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="toolbar wrap">
+            <div>
+              <h3>Session Mounts</h3>
+              <div class="meta">Prefilled from the mount template root. You can add, edit, or remove rows before create.</div>
+            </div>
+            <div class="actions">
+              <button class="secondary" id="add-mount-row">Add Mount</button>
+            </div>
+          </div>
+          <div class="mount-editor-list" id="create-session-mounts"></div>
+        </div>
+
         <div class="actions">
           <button id="create-session">Create Session</button>
         </div>
@@ -161,6 +186,24 @@
           <div id="execution-history" class="execution-history"></div>
           <div id="execution-detail" class="empty">Select an execution from the history list.</div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="quick-execute-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2>Quick Execute Result</h2>
+          <div class="meta">Runs the environment preset command directly from the session table.</div>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="quick-execute-open-logs">View Execute Logs</button>
+          <button class="secondary modal-close" data-close-modal="quick-execute-backdrop">Close</button>
+        </div>
+      </div>
+      <div class="stack" id="quick-execute-content">
+        <div class="empty">Run quick execute from a session row to inspect the result.</div>
       </div>
     </div>
   </div>

@@ -355,6 +355,11 @@ td strong {
   gap: 10px;
 }
 
+.mount-editor-list {
+  display: grid;
+  gap: 12px;
+}
+
 .mount-item,
 .history-item {
   border: 1px solid var(--line);
@@ -370,6 +375,22 @@ td strong {
 .history-item.active {
   border-color: rgba(10, 107, 105, 0.35);
   box-shadow: inset 0 0 0 1px rgba(10, 107, 105, 0.18);
+}
+
+.mount-editor {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.mount-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .split {

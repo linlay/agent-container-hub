@@ -230,6 +230,170 @@ func TestCreateRejectsDisabledEnvironment(t *testing.T) {
 	}
 }
 
+func TestCreateMergesEnvironmentAndSessionMounts(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	envSource := filepath.Join(filepath.Dir(services.sessions.cfg.BuildRoot), "builds", "skills")
+	if err := os.MkdirAll(envSource, 0o755); err != nil {
+		t.Fatalf("MkdirAll(envSource) error = %v", err)
+	}
+	sessionSource := filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, "home")
+	if err := os.MkdirAll(sessionSource, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sessionSource) error = %v", err)
+	}
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Mounts: []model.Mount{{
+			Source:      envSource,
+			Destination: "/skills",
+			ReadOnly:    true,
+		}},
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "mount-session",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      sessionSource,
+			Destination: "/home",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if len(created.Mounts) != 3 {
+		t.Fatalf("created mounts len = %d, want 3", len(created.Mounts))
+	}
+	if fake.lastCreate.Mounts[0].Destination != "/skills" || !fake.lastCreate.Mounts[0].ReadOnly {
+		t.Fatalf("env mount = %+v", fake.lastCreate.Mounts[0])
+	}
+	if fake.lastCreate.Mounts[1].Destination != "/home" || fake.lastCreate.Mounts[1].ReadOnly {
+		t.Fatalf("session mount = %+v", fake.lastCreate.Mounts[1])
+	}
+	if fake.lastCreate.Mounts[2].Destination != "/workspace" {
+		t.Fatalf("workspace mount = %+v", fake.lastCreate.Mounts[2])
+	}
+}
+
+func TestCreateRejectsDuplicateMountDestinations(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	sourceA := filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, "home")
+	sourceB := filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, "pan")
+	if err := os.MkdirAll(sourceA, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sourceA) error = %v", err)
+	}
+	if err := os.MkdirAll(sourceB, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sourceB) error = %v", err)
+	}
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	_, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "dup-mounts",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{
+			{Source: sourceA, Destination: "/tmp"},
+			{Source: sourceB, Destination: "/tmp"},
+		},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	source := filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, "home")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	_, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "reserved-workspace",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      source,
+			Destination: "/workspace",
+		}},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateTemplateListsMountDefaultsAndChats(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	for _, dir := range []string{"home", "pan", "skills", filepath.Join("chats", "chat-a"), filepath.Join("chats", "chat-b")} {
+		if err := os.MkdirAll(filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+
+	template, err := services.sessions.CreateTemplate(context.Background())
+	if err != nil {
+		t.Fatalf("CreateTemplate() error = %v", err)
+	}
+	if template.MountTemplateRoot != services.sessions.cfg.SessionMountTemplateRoot {
+		t.Fatalf("MountTemplateRoot = %q, want %q", template.MountTemplateRoot, services.sessions.cfg.SessionMountTemplateRoot)
+	}
+	if len(template.DefaultMounts) != 3 {
+		t.Fatalf("default mounts len = %d, want 3", len(template.DefaultMounts))
+	}
+	if template.DefaultMounts[0].Destination != "/home" || template.DefaultMounts[1].Destination != "/pan" || template.DefaultMounts[2].Destination != "/skills" {
+		t.Fatalf("default mounts = %+v", template.DefaultMounts)
+	}
+	if len(template.ChatIDs) != 2 || template.ChatIDs[0] != "chat-a" || template.ChatIDs[1] != "chat-b" {
+		t.Fatalf("chat IDs = %+v", template.ChatIDs)
+	}
+}
+
 func TestExecuteReturnsNotFoundForMissingSession(t *testing.T) {
 	t.Parallel()
 
@@ -775,14 +939,15 @@ func newTestServicesWithOptions(t *testing.T, configure func(*config.Config)) (*
 
 	tempDir := t.TempDir()
 	cfg := config.Config{
-		BindAddr:              "127.0.0.1:0",
-		StateDBPath:           filepath.Join(tempDir, "agent-container-hub.db"),
-		ConfigRoot:            filepath.Join(tempDir, "configs"),
-		WorkspaceRoot:         filepath.Join(tempDir, "workspaces"),
-		BuildRoot:             filepath.Join(tempDir, "builds"),
-		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
-		DefaultCommandTimeout: 100 * time.Millisecond,
-		ExecLogMaxOutputBytes: 65536,
+		BindAddr:                 "127.0.0.1:0",
+		StateDBPath:              filepath.Join(tempDir, "agent-container-hub.db"),
+		ConfigRoot:               filepath.Join(tempDir, "configs"),
+		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
+		BuildRoot:                filepath.Join(tempDir, "builds"),
+		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
+		AllowedMountRoots:        []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds"), filepath.Join(tempDir, "zenmind-env")},
+		DefaultCommandTimeout:    100 * time.Millisecond,
+		ExecLogMaxOutputBytes:    65536,
 	}
 	if configure != nil {
 		configure(&cfg)
@@ -792,6 +957,9 @@ func newTestServicesWithOptions(t *testing.T, configure func(*config.Config)) (*
 	}
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(builds) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "chats"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(session mount template root) error = %v", err)
 	}
 	st, err := store.Open(cfg.StateDBPath)
 	if err != nil {

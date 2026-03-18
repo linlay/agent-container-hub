@@ -54,6 +54,7 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		Mounts:          append([]model.Mount(nil), req.Mounts...),
 		Resources:       req.Resources,
 		Enabled:         req.Enabled,
+		DefaultExecute:  req.DefaultExecute.Clone(),
 		Build:           req.Build.Clone(),
 	}
 
@@ -107,6 +108,7 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		Mounts:          append([]model.Mount(nil), environment.Mounts...),
 		Resources:       environment.Resources,
 		Enabled:         environment.Enabled,
+		DefaultExecute:  environment.DefaultExecute.Clone(),
 		Build:           environment.Build.Clone(),
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,

@@ -23,6 +23,7 @@ var uiFiles embed.FS
 
 type SessionService interface {
 	Create(context.Context, api.CreateSessionRequest) (*api.CreateSessionResponse, error)
+	CreateTemplate(context.Context) (*api.SessionCreateTemplateResponse, error)
 	Execute(context.Context, string, api.ExecuteSessionRequest) (*api.ExecuteSessionResponse, error)
 	Stop(context.Context, string) (*api.StopSessionResponse, error)
 	List(context.Context) ([]*api.SessionResponse, error)
@@ -74,6 +75,7 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	mux.HandleFunc("GET /login", server.handleLoginPage)
 
 	mux.Handle("POST /api/sessions/create", server.requireAuth(http.HandlerFunc(server.handleCreateSession)))
+	mux.Handle("GET /api/session-create/template", server.requireAuth(http.HandlerFunc(server.handleGetSessionCreateTemplate)))
 	mux.Handle("GET /api/sessions", server.requireAuth(http.HandlerFunc(server.handleListSessions)))
 	mux.Handle("GET /api/sessions/query", server.requireAuth(http.HandlerFunc(server.handleQuerySessions)))
 	mux.Handle("GET /api/sessions/{id}", server.requireAuth(http.HandlerFunc(server.handleGetSession)))
@@ -161,6 +163,15 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := s.sessions.Create(r.Context(), req)
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetSessionCreateTemplate(w http.ResponseWriter, r *http.Request) {
+	response, err := s.sessions.CreateTemplate(r.Context())
 	if err != nil {
 		writeMappedError(w, err)
 		return
