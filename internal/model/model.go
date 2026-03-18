@@ -18,7 +18,7 @@ type ResourceSpec struct {
 }
 
 type BuildSpec struct {
-	Dockerfile   string            `json:"dockerfile" yaml:"dockerfile"`
+	Dockerfile   string            `json:"dockerfile,omitempty" yaml:"dockerfile,omitempty"`
 	BuildArgs    map[string]string `json:"build_args,omitempty" yaml:"build_args,omitempty"`
 	Notes        string            `json:"notes,omitempty" yaml:"notes,omitempty"`
 	SmokeCommand string            `json:"smoke_command,omitempty" yaml:"smoke_command,omitempty"`

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"agent-container-hub/internal/model"
 )
@@ -39,6 +40,21 @@ type EnvironmentStore interface {
 	GetEnvironment(context.Context, string) (*model.Environment, error)
 	ListEnvironments(context.Context) ([]*model.Environment, error)
 	DeleteEnvironment(context.Context, string) error
+	ListEnvironmentFiles(context.Context, string) ([]EnvironmentFile, error)
+	ReadEnvironmentFile(context.Context, string, string) (*EnvironmentFileContent, error)
+	WriteEnvironmentFile(context.Context, string, string, []byte) error
+}
+
+type EnvironmentFile struct {
+	Path       string
+	Size       int64
+	ModifiedAt time.Time
+	Type       string
+}
+
+type EnvironmentFileContent struct {
+	EnvironmentFile
+	Content []byte
 }
 
 type SessionQuery struct {

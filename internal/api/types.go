@@ -128,6 +128,18 @@ type EnvironmentResponse struct {
 	YAML            string              `json:"yaml,omitempty"`
 }
 
+type EnvironmentFileResponse struct {
+	Path       string    `json:"path"`
+	Size       int64     `json:"size"`
+	ModifiedAt time.Time `json:"modified_at"`
+	Type       string    `json:"type"`
+	Content    string    `json:"content,omitempty"`
+}
+
+type PutEnvironmentFileRequest struct {
+	Content string `json:"content"`
+}
+
 type BuildEnvironmentRequest struct{}
 
 type BuildJobResponse struct {

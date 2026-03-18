@@ -93,12 +93,32 @@
           </div>
         </div>
 
-        <label>Dockerfile
-          <textarea class="tall" id="dockerfile">FROM busybox:latest
-CMD ["/bin/sh"]</textarea>
-        </label>
-
         <pre id="environment-output">Select or create an environment to begin.</pre>
+
+        <div class="stack">
+          <div class="toolbar wrap">
+            <div>
+              <h3>Environment Files</h3>
+              <div class="meta">Edit `environment.yml`, `Dockerfile`, `build.sh`, and allowed helper files under `scripts/` or `curl/`.</div>
+            </div>
+            <div class="actions">
+              <button class="secondary" id="refresh-files">Refresh Files</button>
+              <button class="secondary" id="new-file">New File</button>
+              <button id="save-file">Save File</button>
+            </div>
+          </div>
+          <div class="split">
+            <div class="list" id="environment-file-list"></div>
+            <div class="stack">
+              <label>File Path
+                <input id="environment-file-path" placeholder="Dockerfile or scripts/example.sh">
+              </label>
+              <label>File Content
+                <textarea class="tall" id="environment-file-content"></textarea>
+              </label>
+            </div>
+          </div>
+        </div>
 
         <div class="stack">
           <div>

@@ -1,5 +1,5 @@
 name: shell
-description: Basic shell environment managed from configs/.
+description: Basic shell environment managed from directory-backed configs/.
 image_repository: busybox
 image_tag: latest
 default_cwd: /workspace
@@ -15,7 +15,4 @@ default_execute:
       echo "Working Dir: $(pwd)"
       echo "Uptime: $(uptime 2>/dev/null || echo 'N/A')"
       ls -la /workspace/
-build:
-  dockerfile: |
-    FROM busybox:latest
-    CMD ["/bin/sh"]
+build: {}

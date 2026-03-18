@@ -36,6 +36,9 @@ type EnvironmentService interface {
 	Upsert(context.Context, api.UpsertEnvironmentRequest) (*api.EnvironmentResponse, error)
 	Get(context.Context, string) (*api.EnvironmentResponse, error)
 	List(context.Context) ([]*api.EnvironmentResponse, error)
+	ListFiles(context.Context, string) ([]*api.EnvironmentFileResponse, error)
+	GetFile(context.Context, string, string) (*api.EnvironmentFileResponse, error)
+	PutFile(context.Context, string, string, string) (*api.EnvironmentFileResponse, error)
 }
 
 type BuildService interface {
@@ -86,6 +89,9 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	mux.Handle("POST /api/environments", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
 	mux.Handle("GET /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironment)))
 	mux.Handle("PUT /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
+	mux.Handle("GET /api/environments/{name}/files", server.requireAuth(http.HandlerFunc(server.handleListEnvironmentFiles)))
+	mux.Handle("GET /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironmentFile)))
+	mux.Handle("PUT /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handlePutEnvironmentFile)))
 	mux.Handle("POST /api/environments/{name}/build", server.requireAuth(http.HandlerFunc(server.handleBuildEnvironment)))
 
 	return mux
@@ -251,6 +257,38 @@ func (s *Server) handleListSessionExecutions(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.List(r.Context())
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleListEnvironmentFiles(w http.ResponseWriter, r *http.Request) {
+	response, err := s.environments.ListFiles(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetEnvironmentFile(w http.ResponseWriter, r *http.Request) {
+	response, err := s.environments.GetFile(r.Context(), r.PathValue("name"), r.PathValue("path"))
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handlePutEnvironmentFile(w http.ResponseWriter, r *http.Request) {
+	var req api.PutEnvironmentFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	response, err := s.environments.PutFile(r.Context(), r.PathValue("name"), r.PathValue("path"), req.Content)
 	if err != nil {
 		writeMappedError(w, err)
 		return

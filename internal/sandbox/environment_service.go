@@ -9,7 +9,6 @@ import (
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/store"
-	"gopkg.in/yaml.v3"
 )
 
 type EnvironmentService struct {
@@ -39,9 +38,6 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 	}
 	if strings.TrimSpace(req.ImageTag) == "" {
 		return nil, fmt.Errorf("%w: image_tag is required", ErrValidation)
-	}
-	if strings.TrimSpace(req.Build.Dockerfile) == "" {
-		return nil, fmt.Errorf("%w: build.dockerfile is required", ErrValidation)
 	}
 
 	environment := &model.Environment{
@@ -96,6 +92,53 @@ func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentRespon
 	return responses, nil
 }
 
+func (s *EnvironmentService) ListFiles(ctx context.Context, name string) ([]*api.EnvironmentFileResponse, error) {
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
+	}
+	files, err := s.environments.ListEnvironmentFiles(ctx, strings.TrimSpace(name))
+	if err != nil {
+		return nil, err
+	}
+	response := make([]*api.EnvironmentFileResponse, 0, len(files))
+	for _, file := range files {
+		response = append(response, &api.EnvironmentFileResponse{
+			Path:       file.Path,
+			Size:       file.Size,
+			ModifiedAt: file.ModifiedAt,
+			Type:       file.Type,
+		})
+	}
+	return response, nil
+}
+
+func (s *EnvironmentService) GetFile(ctx context.Context, name, relPath string) (*api.EnvironmentFileResponse, error) {
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
+	}
+	file, err := s.environments.ReadEnvironmentFile(ctx, strings.TrimSpace(name), relPath)
+	if err != nil {
+		return nil, err
+	}
+	return &api.EnvironmentFileResponse{
+		Path:       file.Path,
+		Size:       file.Size,
+		ModifiedAt: file.ModifiedAt,
+		Type:       file.Type,
+		Content:    string(file.Content),
+	}, nil
+}
+
+func (s *EnvironmentService) PutFile(ctx context.Context, name, relPath, content string) (*api.EnvironmentFileResponse, error) {
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
+	}
+	if err := s.environments.WriteEnvironmentFile(ctx, strings.TrimSpace(name), relPath, []byte(content)); err != nil {
+		return nil, err
+	}
+	return s.GetFile(ctx, name, relPath)
+}
+
 func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.Environment, includeYAML bool) (*api.EnvironmentResponse, error) {
 	response := &api.EnvironmentResponse{
 		Name:            environment.Name,
@@ -127,11 +170,11 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		response.LastBuild = buildJobToResponse(latest)
 	}
 	if includeYAML {
-		payload, err := yaml.Marshal(environment)
+		payload, err := s.environments.ReadEnvironmentFile(ctx, environment.Name, "environment.yml")
 		if err != nil {
-			return nil, fmt.Errorf("marshal environment yaml: %w", err)
+			return nil, fmt.Errorf("read environment yaml: %w", err)
 		}
-		response.YAML = string(payload)
+		response.YAML = string(payload.Content)
 	}
 	return response, nil
 }

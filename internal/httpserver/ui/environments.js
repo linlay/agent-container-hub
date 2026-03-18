@@ -8,6 +8,11 @@ const state = {
     selectedDetails: defaultEnvironmentDetails(),
     selectedDefaultExecute: defaultExecutePreset(),
   },
+  files: {
+    items: [],
+    selectedPath: "",
+    selectedContent: "",
+  },
 };
 
 const environmentList = document.getElementById("environment-list");
@@ -15,6 +20,12 @@ const environmentOutput = document.getElementById("environment-output");
 const environmentYAML = document.getElementById("environment-yaml");
 const saveButton = document.getElementById("save");
 const buildButton = document.getElementById("build");
+const refreshFilesButton = document.getElementById("refresh-files");
+const newFileButton = document.getElementById("new-file");
+const saveFileButton = document.getElementById("save-file");
+const environmentFileList = document.getElementById("environment-file-list");
+const environmentFilePath = document.getElementById("environment-file-path");
+const environmentFileContent = document.getElementById("environment-file-content");
 
 function clearEnvironmentForm() {
   document.getElementById("name").value = "";
@@ -26,15 +37,20 @@ function clearEnvironmentForm() {
   document.getElementById("default-execute-cwd").value = "";
   document.getElementById("default-execute-timeout").value = "";
   document.getElementById("default-execute-args").value = "";
-  document.getElementById("dockerfile").value = "FROM busybox:latest\nCMD [\"/bin/sh\"]";
   state.environments.selectedBuild = defaultBuild();
   state.environments.selectedDetails = defaultEnvironmentDetails();
   state.environments.selectedDefaultExecute = defaultExecutePreset();
+  state.files.items = [];
+  state.files.selectedPath = "";
+  state.files.selectedContent = "";
+  environmentFilePath.value = "";
+  environmentFileContent.value = "";
+  renderEnvironmentFiles();
 }
 
 function defaultBuild() {
   return {
-    dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]",
+    dockerfile: "",
     build_args: {},
     notes: "",
     smoke_command: "",
@@ -85,6 +101,66 @@ function normalizeExecutePreset(preset) {
     ...(preset || {}),
     args: Array.isArray(preset?.args) ? [...preset.args] : [],
   };
+}
+
+function fileTypeLabel(file) {
+  return `${file.type || "other"} · ${file.path}`;
+}
+
+async function refreshEnvironmentFiles(name = state.environments.selectedName, preferredPath = "") {
+  if (!name) {
+    state.files.items = [];
+    state.files.selectedPath = "";
+    state.files.selectedContent = "";
+    renderEnvironmentFiles();
+    return;
+  }
+  const items = await api(`/api/environments/${name}/files`);
+  state.files.items = items || [];
+  if (preferredPath && state.files.items.find((item) => item.path === preferredPath)) {
+    state.files.selectedPath = preferredPath;
+  } else if (!state.files.items.find((item) => item.path === state.files.selectedPath)) {
+    state.files.selectedPath = state.files.items[0]?.path || "";
+  }
+  renderEnvironmentFiles();
+  if (state.files.selectedPath) {
+    await loadEnvironmentFile(state.files.selectedPath);
+    return;
+  }
+  state.files.selectedContent = "";
+  environmentFileContent.value = "";
+}
+
+async function loadEnvironmentFile(path) {
+  const name = state.environments.selectedName;
+  if (!name || !path) {
+    return;
+  }
+  const file = await api(`/api/environments/${name}/files/${encodeURIComponent(path).replaceAll("%2F", "/")}`);
+  state.files.selectedPath = file.path;
+  state.files.selectedContent = file.content || "";
+  environmentFilePath.value = state.files.selectedPath;
+  environmentFileContent.value = state.files.selectedContent;
+  renderEnvironmentFiles();
+}
+
+function renderEnvironmentFiles() {
+  const selectedPath = state.files.selectedPath;
+  environmentFileList.innerHTML = state.files.items.map((file) => `
+    <div class="list-item ${selectedPath === file.path ? "active" : ""}" data-file-path="${escapeHTML(file.path)}">
+      <strong>${escapeHTML(file.path)}</strong>
+      <div class="meta">${escapeHTML(file.type || "other")}</div>
+    </div>
+  `).join("") || `<div class="empty">No editable files yet.</div>`;
+
+  environmentFileList.querySelectorAll("[data-file-path]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      await loadEnvironmentFile(node.dataset.filePath);
+    });
+  });
+
+  environmentFilePath.value = state.files.selectedPath || "";
+  saveFileButton.disabled = !state.environments.selectedName;
 }
 
 async function refreshEnvironments(selectedName = "") {
@@ -141,18 +217,18 @@ async function selectEnvironment(name) {
   document.getElementById("default-execute-cwd").value = state.environments.selectedDefaultExecute.cwd || "";
   document.getElementById("default-execute-timeout").value = state.environments.selectedDefaultExecute.timeout_ms || "";
   document.getElementById("default-execute-args").value = state.environments.selectedDefaultExecute.args.join("\n");
-  document.getElementById("dockerfile").value = state.environments.selectedBuild.dockerfile || "";
   environmentOutput.textContent = item.last_build
     ? `Last build ${item.last_build.status} at ${item.last_build.started_at || "-"}`
     : "Environment loaded.";
   environmentYAML.textContent = item.yaml || "No YAML available.";
+  await refreshEnvironmentFiles(item.name, state.files.selectedPath || "environment.yml");
   renderEnvironments();
 }
 
 function collectEnvironmentPayload() {
   const build = {
     ...normalizeBuild(state.environments.selectedBuild),
-    dockerfile: document.getElementById("dockerfile").value,
+    dockerfile: "",
   };
   const defaultExecute = normalizeExecutePreset({
     command: document.getElementById("default-execute-command").value.trim(),
@@ -235,6 +311,71 @@ async function initialize() {
       showToast(error.message, "error");
     } finally {
       setLoading(buildButton, false);
+    }
+  });
+
+  refreshFilesButton.addEventListener("click", async () => {
+    try {
+      await refreshEnvironmentFiles();
+      showToast("Environment files refreshed.", "success");
+    } catch (error) {
+      environmentOutput.textContent = error.message;
+      showToast(error.message, "error");
+    }
+  });
+
+  newFileButton.addEventListener("click", () => {
+    state.files.selectedPath = "";
+    state.files.selectedContent = "";
+    environmentFilePath.value = "";
+    environmentFileContent.value = "";
+    renderEnvironmentFiles();
+  });
+
+  environmentFilePath.addEventListener("input", () => {
+    state.files.selectedPath = environmentFilePath.value.trim();
+  });
+
+  environmentFileContent.addEventListener("input", () => {
+    state.files.selectedContent = environmentFileContent.value;
+  });
+
+  saveFileButton.addEventListener("click", async () => {
+    const name = state.environments.selectedName || document.getElementById("name").value.trim();
+    const path = environmentFilePath.value.trim();
+    if (!name) {
+      environmentOutput.textContent = "Save the environment metadata first so files have a directory to live in.";
+      showToast("Save the environment metadata first so files have a directory to live in.", "error");
+      return;
+    }
+    if (!path) {
+      environmentOutput.textContent = "File path is required.";
+      showToast("File path is required.", "error");
+      return;
+    }
+
+    setLoading(saveFileButton, true);
+    try {
+      const result = await api(`/api/environments/${name}/files/${encodeURIComponent(path).replaceAll("%2F", "/")}`, {
+        method: "PUT",
+        body: JSON.stringify({ content: environmentFileContent.value }),
+      });
+      state.files.selectedPath = result.path;
+      state.files.selectedContent = result.content || "";
+      environmentFilePath.value = result.path;
+      environmentFileContent.value = state.files.selectedContent;
+      environmentOutput.textContent = `Saved ${result.path}.`;
+      showToast(`Saved ${result.path}.`, "success");
+      if (result.path === "environment.yml") {
+        await refreshEnvironments(name);
+      } else {
+        await refreshEnvironmentFiles(name, result.path);
+      }
+    } catch (error) {
+      environmentOutput.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      setLoading(saveFileButton, false);
     }
   });
 

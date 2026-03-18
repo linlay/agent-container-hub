@@ -199,7 +199,10 @@ func TestListEnvironmentsReturnsFilenameForInvalidYAML(t *testing.T) {
 	t.Parallel()
 
 	handler, cfg := newTestHandlerWithConfig(t, "")
-	if err := os.WriteFile(filepath.Join(cfg.ConfigRoot, "environments", "broken.yaml"), []byte("name: [\n"), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.ConfigRoot, "environments", "broken"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.ConfigRoot, "environments", "broken", "environment.yml"), []byte("name: [\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -209,7 +212,7 @@ func TestListEnvironmentsReturnsFilenameForInvalidYAML(t *testing.T) {
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("GET /api/environments status = %d, want 500", recorder.Code)
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte("broken.yaml")) {
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(filepath.Join("broken", "environment.yml"))) {
 		t.Fatalf("GET /api/environments body = %q, want filename", recorder.Body.String())
 	}
 }
@@ -227,7 +230,10 @@ func TestTargetedEnvironmentReadIgnoresUnrelatedInvalidYAML(t *testing.T) {
 			Dockerfile: "FROM busybox:latest\n",
 		},
 	}, http.StatusOK, "")
-	if err := os.WriteFile(filepath.Join(cfg.ConfigRoot, "environments", "broken.yaml"), []byte("name: [\n"), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.ConfigRoot, "environments", "broken"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.ConfigRoot, "environments", "broken", "environment.yml"), []byte("name: [\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -316,6 +322,68 @@ func TestEnvironmentAPIRoundTripsDefaultExecute(t *testing.T) {
 	listed := doJSON[[]api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments", nil, http.StatusOK, "")
 	if len(listed) != 1 || listed[0].DefaultExecute.Command != "pwd" {
 		t.Fatalf("listed default execute = %+v", listed)
+	}
+}
+
+func TestEnvironmentFileAPIListsGetsAndSavesFiles(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	files := doJSON[[]api.EnvironmentFileResponse](t, handler, http.MethodGet, "/api/environments/shell/files", nil, http.StatusOK, "")
+	if len(files) != 2 {
+		t.Fatalf("files len = %d, want 2", len(files))
+	}
+
+	dockerfile := doJSON[api.EnvironmentFileResponse](t, handler, http.MethodGet, "/api/environments/shell/files/Dockerfile", nil, http.StatusOK, "")
+	if dockerfile.Type != "dockerfile" || !bytes.Contains([]byte(dockerfile.Content), []byte("FROM busybox")) {
+		t.Fatalf("Dockerfile response = %+v", dockerfile)
+	}
+
+	saved := doJSON[api.EnvironmentFileResponse](t, handler, http.MethodPut, "/api/environments/shell/files/build.sh", api.PutEnvironmentFileRequest{
+		Content: "#!/bin/sh\necho shell\n",
+	}, http.StatusOK, "")
+	if saved.Path != "build.sh" || saved.Type != "script" {
+		t.Fatalf("saved file = %+v", saved)
+	}
+
+	updatedFiles := doJSON[[]api.EnvironmentFileResponse](t, handler, http.MethodGet, "/api/environments/shell/files", nil, http.StatusOK, "")
+	if len(updatedFiles) != 3 {
+		t.Fatalf("updated files len = %d, want 3", len(updatedFiles))
+	}
+}
+
+func TestEnvironmentFileAPIRejectsInvalidPaths(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	req := httptest.NewRequest(http.MethodPut, "/api/environments/shell/files/tmp/file.txt", bytes.NewBufferString(`{"content":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("PUT invalid file path status = %d, want 404", recorder.Code)
 	}
 }
 

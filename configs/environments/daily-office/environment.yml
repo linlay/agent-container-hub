@@ -1,0 +1,42 @@
+name: daily-office
+description: Daily office runtime with directory-managed build assets and optional runtime-mounted skills under /skills.
+image_repository: daily-office
+image_tag: latest
+default_cwd: /workspace
+default_env:
+  DAILY_OFFICE_HOME: /opt/daily-office
+  NODE_PATH: /opt/daily-office/node_modules
+  PATH: /opt/daily-office/node_modules/.bin:/skills/scripts:/skills/docx/scripts:/skills/pptx/scripts:/skills/pdf/scripts:/skills/xlsx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+enabled: true
+default_execute:
+  command: /bin/bash
+  args:
+    - -lc
+    - |
+      echo "=== Environment Health Check ==="
+      echo "Hostname: $(hostname)"
+      echo "User: $(whoami)"
+      echo "Working Dir: $(pwd)"
+      echo "Disk Usage: $(df -h /workspace | tail -1)"
+      echo ""
+      echo "=== Tool Versions ==="
+      echo "Python: $(python --version 2>&1)"
+      echo "Node: $(node --version 2>&1)"
+      echo "LibreOffice: $(soffice --version 2>&1)"
+      echo "Himalaya: $(himalaya --version 2>&1 || echo 'not available')"
+      echo ""
+      echo "=== Python Packages ==="
+      python -c "import openpyxl, pandas, pdfplumber, reportlab; print('Core packages OK')"
+      echo ""
+      echo "=== Node Packages ==="
+      node -e "require('docx'); require('pptxgenjs'); require('sharp'); console.log('Core packages OK')"
+      echo ""
+      echo "=== Skills Mount ==="
+      ls /skills/ 2>/dev/null || echo '/skills not mounted'
+  timeout_ms: 30000
+build:
+  notes: Runtime skills can be mounted to /skills as read-only content when a session explicitly adds that mount.
+  smoke_command: /bin/bash
+  smoke_args:
+    - -lc
+    - command -v bash >/dev/null && command -v python >/dev/null && command -v node >/dev/null && command -v soffice >/dev/null && command -v himalaya >/dev/null && python -c 'import defusedxml.minidom, markitdown, openpyxl' && node -e 'require("docx"); require("pptxgenjs"); require("sharp")'
