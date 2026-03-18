@@ -46,12 +46,16 @@ func TestSessionCreateExecuteAndStop(t *testing.T) {
 	if created.EnvironmentName != "shell" {
 		t.Fatalf("Create() environment = %q, want shell", created.EnvironmentName)
 	}
+	if created.DurationMS < 0 {
+		t.Fatalf("Create() duration_ms = %d, want non-negative", created.DurationMS)
+	}
 
+	startedAt := time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC)
 	fake.execResult = runtime.ExecResult{
 		ExitCode:   0,
 		Stdout:     "ok",
-		StartedAt:  time.Now().UTC(),
-		FinishedAt: time.Now().UTC(),
+		StartedAt:  startedAt,
+		FinishedAt: startedAt.Add(95 * time.Millisecond),
 	}
 	executed, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
 		Command: "pwd",
@@ -62,15 +66,140 @@ func TestSessionCreateExecuteAndStop(t *testing.T) {
 	if executed.Stdout != "ok" {
 		t.Fatalf("Execute() stdout = %q, want ok", executed.Stdout)
 	}
+	if executed.DurationMS != 95 {
+		t.Fatalf("Execute() duration_ms = %d, want 95", executed.DurationMS)
+	}
 	if fake.lastExec.Cwd != "/workspace/project" {
 		t.Fatalf("lastExec cwd = %q, want /workspace/project", fake.lastExec.Cwd)
 	}
 
-	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
+	stopped, err := services.sessions.Stop(context.Background(), created.SessionID)
+	if err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	if _, err := services.sessions.Get(context.Background(), created.SessionID); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("Get() error = %v, want ErrNotFound", err)
+	if stopped.DurationMS < 0 {
+		t.Fatalf("Stop() duration_ms = %d, want non-negative", stopped.DurationMS)
+	}
+	stored, err := services.sessions.Get(context.Background(), created.SessionID)
+	if err != nil {
+		t.Fatalf("Get() after Stop error = %v", err)
+	}
+	if stored.Status != string(model.SessionStatusStopped) {
+		t.Fatalf("stored.Status = %q, want stopped", stored.Status)
+	}
+	if stored.StoppedAt.IsZero() {
+		t.Fatal("expected stopped_at to be set")
+	}
+	active, err := services.sessions.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active sessions len = %d, want 0", len(active))
+	}
+}
+
+func TestSessionExecuteCanReuseSameRunningSession(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		DefaultCwd:      "/workspace",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "reuse-session",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	fake.execResult = runtime.ExecResult{ExitCode: 0, Stdout: "first"}
+	first, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
+		Command: "echo",
+		Args:    []string{"first"},
+	})
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if first.Stdout != "first" {
+		t.Fatalf("first Execute() stdout = %q, want first", first.Stdout)
+	}
+
+	fake.execResult = runtime.ExecResult{ExitCode: 0, Stdout: "second"}
+	second, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
+		Command: "echo",
+		Args:    []string{"second"},
+	})
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if second.Stdout != "second" {
+		t.Fatalf("second Execute() stdout = %q, want second", second.Stdout)
+	}
+	if fake.startCalls != 1 {
+		t.Fatalf("startCalls = %d, want 1", fake.startCalls)
+	}
+}
+
+func TestDurationMilliseconds(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		result runtime.ExecResult
+		want   int64
+	}{
+		{
+			name: "positive duration",
+			result: runtime.ExecResult{
+				StartedAt:  startedAt,
+				FinishedAt: startedAt.Add(95 * time.Millisecond),
+			},
+			want: 95,
+		},
+		{
+			name: "zero duration",
+			result: runtime.ExecResult{
+				StartedAt:  startedAt,
+				FinishedAt: startedAt,
+			},
+			want: 0,
+		},
+		{
+			name: "negative duration clamps to zero",
+			result: runtime.ExecResult{
+				StartedAt:  startedAt,
+				FinishedAt: startedAt.Add(-95 * time.Millisecond),
+			},
+			want: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := durationMilliseconds(tc.result.StartedAt, tc.result.FinishedAt)
+			if got != tc.want {
+				t.Fatalf("durationMilliseconds() = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -325,6 +454,173 @@ func TestEnvironmentUpdateDoesNotRewriteExistingSessionSnapshot(t *testing.T) {
 	}
 }
 
+func TestQuerySessionsSeparatesActiveAndHistory(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	activeSession, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "active-session",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create(active) error = %v", err)
+	}
+	historySession, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "history-session",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create(history) error = %v", err)
+	}
+	if _, err := services.sessions.Stop(context.Background(), historySession.SessionID); err != nil {
+		t.Fatalf("Stop(history) error = %v", err)
+	}
+
+	activeResp, err := services.sessions.Query(context.Background(), store.SessionQuery{
+		Status: "active",
+		Pagination: store.Pagination{
+			Page:     1,
+			PageSize: 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query(active) error = %v", err)
+	}
+	if len(activeResp.Items) != 1 || activeResp.Items[0].SessionID != activeSession.SessionID {
+		t.Fatalf("active items = %+v, want only %q", activeResp.Items, activeSession.SessionID)
+	}
+
+	historyResp, err := services.sessions.Query(context.Background(), store.SessionQuery{
+		Status: "history",
+		Pagination: store.Pagination{
+			Page:     1,
+			PageSize: 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query(history) error = %v", err)
+	}
+	if len(historyResp.Items) != 1 || historyResp.Items[0].SessionID != historySession.SessionID {
+		t.Fatalf("history items = %+v, want only %q", historyResp.Items, historySession.SessionID)
+	}
+}
+
+func TestExecuteLogPersistenceAndTruncation(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServicesWithOptions(t, func(cfg *config.Config) {
+		cfg.EnableExecLogPersist = true
+		cfg.ExecLogMaxOutputBytes = 4
+	})
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "log-session",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	fake.execResult = runtime.ExecResult{
+		ExitCode:   0,
+		Stdout:     "abcdef",
+		Stderr:     "wxyz12",
+		StartedAt:  time.Now().UTC(),
+		FinishedAt: time.Now().UTC().Add(5 * time.Millisecond),
+	}
+	if _, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
+		Command: "echo",
+		Args:    []string{"hello"},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	logs, err := services.sessions.ListExecutions(context.Background(), created.SessionID, store.Pagination{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("ListExecutions() error = %v", err)
+	}
+	if len(logs.Items) != 1 {
+		t.Fatalf("logs len = %d, want 1", len(logs.Items))
+	}
+	if logs.Items[0].Stdout != "abcd" || !logs.Items[0].StdoutTruncated {
+		t.Fatalf("stdout log = %+v, want truncated abcd", logs.Items[0])
+	}
+	if logs.Items[0].Stderr != "wxyz" || !logs.Items[0].StderrTruncated {
+		t.Fatalf("stderr log = %+v, want truncated wxyz", logs.Items[0])
+	}
+}
+
+func TestExecuteLogPersistenceDisabledSkipsStorage(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "no-log-session",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
+		Command: "pwd",
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	logs, err := services.sessions.ListExecutions(context.Background(), created.SessionID, store.Pagination{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("ListExecutions() error = %v", err)
+	}
+	if len(logs.Items) != 0 {
+		t.Fatalf("logs len = %d, want 0", len(logs.Items))
+	}
+}
+
 type testServices struct {
 	store        store.RuntimeStore
 	envs         store.EnvironmentStore
@@ -336,6 +632,12 @@ type testServices struct {
 func newTestServices(t *testing.T) (*testServices, func(), *fakeRuntime) {
 	t.Helper()
 
+	return newTestServicesWithOptions(t, nil)
+}
+
+func newTestServicesWithOptions(t *testing.T, configure func(*config.Config)) (*testServices, func(), *fakeRuntime) {
+	t.Helper()
+
 	tempDir := t.TempDir()
 	cfg := config.Config{
 		BindAddr:              "127.0.0.1:0",
@@ -345,6 +647,10 @@ func newTestServices(t *testing.T) (*testServices, func(), *fakeRuntime) {
 		BuildRoot:             filepath.Join(tempDir, "builds"),
 		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
 		DefaultCommandTimeout: 100 * time.Millisecond,
+		ExecLogMaxOutputBytes: 65536,
+	}
+	if configure != nil {
+		configure(&cfg)
 	}
 	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspaces) error = %v", err)

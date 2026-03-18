@@ -9,6 +9,7 @@ import (
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/store"
+	"gopkg.in/yaml.v3"
 )
 
 type EnvironmentService struct {
@@ -60,7 +61,7 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		return nil, err
 	}
 	s.logger.Info("environment upserted", "environment", environment.Name, "image", environment.ImageRef())
-	return s.toResponse(ctx, stored)
+	return s.toResponse(ctx, stored, true)
 }
 
 func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.EnvironmentResponse, error) {
@@ -71,7 +72,7 @@ func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.Environ
 	if err != nil {
 		return nil, err
 	}
-	return s.toResponse(ctx, environment)
+	return s.toResponse(ctx, environment, true)
 }
 
 func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentResponse, error) {
@@ -81,7 +82,7 @@ func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentRespon
 	}
 	responses := make([]*api.EnvironmentResponse, 0, len(environments))
 	for _, environment := range environments {
-		response, err := s.toResponse(ctx, environment)
+		response, err := s.toResponse(ctx, environment, false)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +91,7 @@ func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentRespon
 	return responses, nil
 }
 
-func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.Environment) (*api.EnvironmentResponse, error) {
+func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.Environment, includeYAML bool) (*api.EnvironmentResponse, error) {
 	response := &api.EnvironmentResponse{
 		Name:            environment.Name,
 		Description:     environment.Description,
@@ -118,6 +119,13 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 			}
 		}
 		response.LastBuild = buildJobToResponse(latest)
+	}
+	if includeYAML {
+		payload, err := yaml.Marshal(environment)
+		if err != nil {
+			return nil, fmt.Errorf("marshal environment yaml: %w", err)
+		}
+		response.YAML = string(payload)
 	}
 	return response, nil
 }

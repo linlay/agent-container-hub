@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -21,11 +22,13 @@ const authCookieName = "agent-container-hub_auth"
 var uiFiles embed.FS
 
 type SessionService interface {
-	Create(context.Context, api.CreateSessionRequest) (*api.SessionResponse, error)
+	Create(context.Context, api.CreateSessionRequest) (*api.CreateSessionResponse, error)
 	Execute(context.Context, string, api.ExecuteSessionRequest) (*api.ExecuteSessionResponse, error)
 	Stop(context.Context, string) (*api.StopSessionResponse, error)
 	List(context.Context) ([]*api.SessionResponse, error)
+	Query(context.Context, store.SessionQuery) (*api.SessionListResponse, error)
 	Get(context.Context, string) (*api.SessionResponse, error)
+	ListExecutions(context.Context, string, store.Pagination) (*api.SessionExecutionListResponse, error)
 }
 
 type EnvironmentService interface {
@@ -63,14 +66,19 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	mux.HandleFunc("POST /api/auth/login", server.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", server.handleLogout)
 
-	mux.Handle("GET /", server.requireAuth(http.HandlerFunc(server.handleApp)))
-	mux.Handle("GET /app", server.requireAuth(http.HandlerFunc(server.handleApp)))
+	mux.Handle("GET /", server.requireAuth(http.HandlerFunc(server.handleSessionsPage)))
+	mux.Handle("GET /app", server.requireAuth(http.HandlerFunc(server.handleSessionsPage)))
+	mux.Handle("GET /sessions", server.requireAuth(http.HandlerFunc(server.handleSessionsPage)))
+	mux.Handle("GET /environments", server.requireAuth(http.HandlerFunc(server.handleEnvironmentsPage)))
+	mux.Handle("GET /ui/", server.requireAuth(http.StripPrefix("/ui/", http.FileServer(http.FS(server.uiFS)))))
 	mux.HandleFunc("GET /login", server.handleLoginPage)
 
 	mux.Handle("POST /api/sessions/create", server.requireAuth(http.HandlerFunc(server.handleCreateSession)))
 	mux.Handle("GET /api/sessions", server.requireAuth(http.HandlerFunc(server.handleListSessions)))
+	mux.Handle("GET /api/sessions/query", server.requireAuth(http.HandlerFunc(server.handleQuerySessions)))
 	mux.Handle("GET /api/sessions/{id}", server.requireAuth(http.HandlerFunc(server.handleGetSession)))
 	mux.Handle("POST /api/sessions/{id}/execute", server.requireAuth(http.HandlerFunc(server.handleExecuteSession)))
+	mux.Handle("GET /api/sessions/{id}/executions", server.requireAuth(http.HandlerFunc(server.handleListSessionExecutions)))
 	mux.Handle("POST /api/sessions/{id}/stop", server.requireAuth(http.HandlerFunc(server.handleStopSession)))
 	mux.Handle("GET /api/environments", server.requireAuth(http.HandlerFunc(server.handleListEnvironments)))
 	mux.Handle("POST /api/environments", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
@@ -102,8 +110,12 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	s.serveUI(w, "login.html")
 }
 
-func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
-	s.serveUI(w, "app.html")
+func (s *Server) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
+	s.serveUI(w, "sessions.html")
+}
+
+func (s *Server) handleEnvironmentsPage(w http.ResponseWriter, r *http.Request) {
+	s.serveUI(w, "environments.html")
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +209,35 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *Server) handleQuerySessions(w http.ResponseWriter, r *http.Request) {
+	response, err := s.sessions.Query(r.Context(), store.SessionQuery{
+		Status:          r.URL.Query().Get("status"),
+		SessionID:       r.URL.Query().Get("session_id"),
+		EnvironmentName: r.URL.Query().Get("environment_name"),
+		Pagination: store.Pagination{
+			Page:     parsePositiveInt(r.URL.Query().Get("page"), 1),
+			PageSize: parsePositiveInt(r.URL.Query().Get("page_size"), 20),
+		},
+	})
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleListSessionExecutions(w http.ResponseWriter, r *http.Request) {
+	response, err := s.sessions.ListExecutions(r.Context(), r.PathValue("id"), store.Pagination{
+		Page:     parsePositiveInt(r.URL.Query().Get("page"), 1),
+		PageSize: parsePositiveInt(r.URL.Query().Get("page_size"), 20),
+	})
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.List(r.Context())
 	if err != nil {
@@ -282,4 +323,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func parsePositiveInt(value string, fallback int) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	var parsed int
+	if _, err := fmt.Sscanf(value, "%d", &parsed); err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }

@@ -25,13 +25,52 @@ type ExecuteSessionResponse struct {
 	Stdout     string    `json:"stdout"`
 	Stderr     string    `json:"stderr"`
 	TimedOut   bool      `json:"timed_out"`
+	DurationMS int64     `json:"duration_ms"`
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
 }
 
+type SessionExecutionResponse struct {
+	ID              int64     `json:"id"`
+	SessionID       string    `json:"session_id"`
+	Command         string    `json:"command"`
+	Args            []string  `json:"args,omitempty"`
+	Cwd             string    `json:"cwd"`
+	TimeoutMS       int64     `json:"timeout_ms"`
+	ExitCode        int       `json:"exit_code"`
+	Stdout          string    `json:"stdout,omitempty"`
+	Stderr          string    `json:"stderr,omitempty"`
+	StdoutTruncated bool      `json:"stdout_truncated,omitempty"`
+	StderrTruncated bool      `json:"stderr_truncated,omitempty"`
+	TimedOut        bool      `json:"timed_out"`
+	DurationMS      int64     `json:"duration_ms"`
+	StartedAt       time.Time `json:"started_at"`
+	FinishedAt      time.Time `json:"finished_at"`
+}
+
+type SessionListResponse struct {
+	Items    []*SessionResponse `json:"items"`
+	Total    int                `json:"total"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
+}
+
+type SessionExecutionListResponse struct {
+	Items    []*SessionExecutionResponse `json:"items"`
+	Total    int                         `json:"total"`
+	Page     int                         `json:"page"`
+	PageSize int                         `json:"page_size"`
+}
+
+type CreateSessionResponse struct {
+	SessionResponse
+	DurationMS int64 `json:"duration_ms"`
+}
+
 type StopSessionResponse struct {
-	SessionID string `json:"session_id"`
-	Status    string `json:"status"`
+	SessionID  string `json:"session_id"`
+	Status     string `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
 }
 
 type SessionResponse struct {
@@ -46,6 +85,7 @@ type SessionResponse struct {
 	Mounts          []model.Mount      `json:"mounts,omitempty"`
 	CreatedAt       time.Time          `json:"created_at"`
 	Status          string             `json:"status,omitempty"`
+	StoppedAt       time.Time          `json:"stopped_at,omitempty"`
 }
 
 type UpsertEnvironmentRequest struct {
@@ -76,6 +116,7 @@ type EnvironmentResponse struct {
 	CreatedAt       time.Time          `json:"created_at"`
 	UpdatedAt       time.Time          `json:"updated_at"`
 	LastBuild       *BuildJobResponse  `json:"last_build,omitempty"`
+	YAML            string             `json:"yaml,omitempty"`
 }
 
 type BuildEnvironmentRequest struct{}

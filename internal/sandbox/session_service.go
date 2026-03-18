@@ -10,10 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/config"
@@ -31,7 +31,7 @@ var (
 
 type SessionService struct {
 	cfg     config.Config
-	store   store.SessionStore
+	store   store.RuntimeStore
 	envs    store.EnvironmentStore
 	runtime runtime.Provider
 	logger  *slog.Logger
@@ -39,7 +39,7 @@ type SessionService struct {
 	locks   map[string]*sync.Mutex
 }
 
-func NewSessionService(cfg config.Config, st store.SessionStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
+func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -53,7 +53,8 @@ func NewSessionService(cfg config.Config, st store.SessionStore, envs store.Envi
 	}
 }
 
-func (s *SessionService) Create(ctx context.Context, req api.CreateSessionRequest) (*api.SessionResponse, error) {
+func (s *SessionService) Create(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error) {
+	startedAt := time.Now().UTC()
 	environmentName := strings.TrimSpace(req.EnvironmentName)
 	if err := validateEnvironmentName(environmentName); err != nil {
 		return nil, err
@@ -148,18 +149,22 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		DefaultCwd:      sessionDefaultCwd(environment.DefaultCwd),
 		WorkspacePath:   workspacePath,
 		Env:             cloneMap(environment.DefaultEnv),
-		Mounts:          append([]model.Mount(nil), environment.Mounts...),
+		Mounts:          append([]model.Mount(nil), mounts...),
 		Resources:       environment.Resources,
 		Labels:          cloneMap(req.Labels),
+		Status:          model.SessionStatusActive,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := s.store.SaveSession(ctx, session); err != nil {
 		return nil, err
 	}
 
-	response := sessionToResponse(session)
-	response.Status = string(started.State)
+	response := sessionToCreateResponse(session, durationMilliseconds(startedAt, time.Now().UTC()))
+	response.Status = string(model.SessionStatusActive)
 	s.logger.Info("session created", "session_id", session.ID, "environment", session.EnvironmentName, "image", session.Image)
+	if started.State != runtime.ContainerRunning {
+		s.logger.Warn("session started with non-running state", "session_id", session.ID, "state", started.State)
+	}
 	return response, nil
 }
 
@@ -181,6 +186,9 @@ func (s *SessionService) Execute(ctx context.Context, sessionID string, req api.
 	if err != nil {
 		return nil, err
 	}
+	if session.Status != model.SessionStatusActive {
+		return nil, fmt.Errorf("%w: session is not active", ErrValidation)
+	}
 
 	execCwd := session.DefaultCwd
 	if strings.TrimSpace(req.Cwd) != "" {
@@ -192,50 +200,67 @@ func (s *SessionService) Execute(ctx context.Context, sessionID string, req api.
 		Cwd:     execCwd,
 		Timeout: timeoutFor(req.TimeoutMS, s.cfg.DefaultCommandTimeout),
 	}
+
+	result, err := s.execOnSession(ctx, session, execOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	response := executeResponse(sessionID, result)
+	if s.cfg.EnableExecLogPersist {
+		execution := executionFromResult(sessionID, req, execCwd, result, s.cfg.ExecLogMaxOutputBytes)
+		if err := s.store.SaveSessionExecution(ctx, execution); err != nil {
+			return nil, err
+		}
+	}
+	return response, nil
+}
+
+func (s *SessionService) execOnSession(ctx context.Context, session *model.Session, execOpts runtime.ExecOptions) (runtime.ExecResult, error) {
 	target := session.ContainerID
 	if target == "" {
 		target = session.ID
 	}
+
 	result, err := s.runtime.Exec(ctx, target, execOpts)
 	if err == nil {
-		return executeResponse(sessionID, result), nil
+		return result, nil
 	}
 	if !errors.Is(err, runtime.ErrContainerNotFound) && !errors.Is(err, runtime.ErrContainerNotRunning) {
-		return nil, err
+		return runtime.ExecResult{}, err
 	}
 
-	info, err := s.inspectSession(ctx, session)
-	if err != nil {
-		if errors.Is(err, runtime.ErrContainerNotFound) {
-			_ = s.store.DeleteSession(ctx, session.ID)
-			return nil, store.ErrNotFound
+	info, inspectErr := s.inspectSession(ctx, session)
+	if inspectErr != nil {
+		if errors.Is(inspectErr, runtime.ErrContainerNotFound) {
+			if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), true); markErr != nil {
+				return runtime.ExecResult{}, markErr
+			}
+			return runtime.ExecResult{}, store.ErrNotFound
 		}
-		return nil, err
+		return runtime.ExecResult{}, inspectErr
 	}
 	if info.State != runtime.ContainerRunning {
 		if _, err := s.runtime.Start(ctx, info.ID); err != nil {
-			return nil, err
+			return runtime.ExecResult{}, err
 		}
 	}
 	if session.ContainerID != info.ID {
 		session.ContainerID = info.ID
 		if err := s.store.SaveSession(ctx, session); err != nil {
-			return nil, err
+			return runtime.ExecResult{}, err
 		}
 	}
-
-	result, err = s.runtime.Exec(ctx, info.ID, execOpts)
-	if err != nil {
-		return nil, err
-	}
-	return executeResponse(session.ID, result), nil
+	return s.runtime.Exec(ctx, info.ID, execOpts)
 }
 
 func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopSessionResponse, error) {
+	startedAt := time.Now().UTC()
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return nil, fmt.Errorf("%w: session_id is required", ErrValidation)
 	}
+
 	release, acquired := s.tryLock(sessionID)
 	if !acquired {
 		return nil, ErrBusy
@@ -243,12 +268,19 @@ func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopS
 	defer release()
 
 	session, err := s.store.GetSession(ctx, sessionID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err != nil {
 		return nil, err
+	}
+	if session.Status != model.SessionStatusActive {
+		return &api.StopSessionResponse{
+			SessionID:  sessionID,
+			Status:     string(session.Status),
+			DurationMS: durationMilliseconds(startedAt, time.Now().UTC()),
+		}, nil
 	}
 
 	target := sessionID
-	if session != nil && session.ContainerID != "" {
+	if session.ContainerID != "" {
 		target = session.ContainerID
 	}
 	if err := s.runtime.Stop(ctx, target, 5*time.Second); err != nil && !errors.Is(err, runtime.ErrContainerNotFound) {
@@ -257,18 +289,15 @@ func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopS
 	if err := s.runtime.Remove(ctx, target); err != nil && !errors.Is(err, runtime.ErrContainerNotFound) {
 		return nil, err
 	}
-	if session != nil {
-		if session.WorkspacePath != "" {
-			if err := os.RemoveAll(session.WorkspacePath); err != nil {
-				return nil, fmt.Errorf("delete workspace: %w", err)
-			}
-		}
-		if err := s.store.DeleteSession(ctx, sessionID); err != nil {
-			return nil, err
-		}
+	if err := s.markSessionStopped(ctx, session, time.Now().UTC(), true); err != nil {
+		return nil, err
 	}
 
-	return &api.StopSessionResponse{SessionID: sessionID, Status: "stopped"}, nil
+	return &api.StopSessionResponse{
+		SessionID:  sessionID,
+		Status:     string(model.SessionStatusStopped),
+		DurationMS: durationMilliseconds(startedAt, time.Now().UTC()),
+	}, nil
 }
 
 func (s *SessionService) List(ctx context.Context) ([]*api.SessionResponse, error) {
@@ -278,22 +307,32 @@ func (s *SessionService) List(ctx context.Context) ([]*api.SessionResponse, erro
 	}
 	responses := make([]*api.SessionResponse, 0, len(sessions))
 	for _, session := range sessions {
-		resp := sessionToResponse(session)
-		info, inspectErr := s.inspectSession(ctx, session)
-		switch {
-		case inspectErr == nil:
-			resp.Status = string(info.State)
-		case errors.Is(inspectErr, runtime.ErrContainerNotFound):
-			resp.Status = "missing"
-		default:
-			return nil, inspectErr
-		}
-		responses = append(responses, resp)
+		responses = append(responses, sessionToResponse(session))
 	}
-	slices.SortFunc(responses, func(a, b *api.SessionResponse) int {
-		return a.CreatedAt.Compare(b.CreatedAt)
-	})
 	return responses, nil
+}
+
+func (s *SessionService) Query(ctx context.Context, query store.SessionQuery) (*api.SessionListResponse, error) {
+	switch strings.ToLower(strings.TrimSpace(query.Status)) {
+	case "", "active", "history", "all":
+	default:
+		return nil, fmt.Errorf("%w: status must be one of active, history, all", ErrValidation)
+	}
+	items, total, err := s.store.QuerySessions(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	page, pageSize := normalizePagination(query.Pagination)
+	responses := make([]*api.SessionResponse, 0, len(items))
+	for _, item := range items {
+		responses = append(responses, sessionToResponse(item))
+	}
+	return &api.SessionListResponse{
+		Items:    responses,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 func (s *SessionService) Get(ctx context.Context, sessionID string) (*api.SessionResponse, error) {
@@ -301,21 +340,58 @@ func (s *SessionService) Get(ctx context.Context, sessionID string) (*api.Sessio
 	if err != nil {
 		return nil, err
 	}
-	response := sessionToResponse(session)
-	info, inspectErr := s.inspectSession(ctx, session)
-	switch {
-	case inspectErr == nil:
-		response.Status = string(info.State)
-	case errors.Is(inspectErr, runtime.ErrContainerNotFound):
-		response.Status = "missing"
-	default:
-		return nil, inspectErr
+	return sessionToResponse(session), nil
+}
+
+func (s *SessionService) ListExecutions(ctx context.Context, sessionID string, pagination store.Pagination) (*api.SessionExecutionListResponse, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("%w: session_id is required", ErrValidation)
 	}
-	return response, nil
+	if _, err := s.store.GetSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	items, total, err := s.store.ListSessionExecutions(ctx, sessionID, pagination)
+	if err != nil {
+		return nil, err
+	}
+	page, pageSize := normalizePagination(pagination)
+	responses := make([]*api.SessionExecutionResponse, 0, len(items))
+	for _, item := range items {
+		responses = append(responses, &api.SessionExecutionResponse{
+			ID:              item.ID,
+			SessionID:       item.SessionID,
+			Command:         item.Command,
+			Args:            append([]string(nil), item.Args...),
+			Cwd:             item.Cwd,
+			TimeoutMS:       item.TimeoutMS,
+			ExitCode:        item.ExitCode,
+			Stdout:          item.Stdout,
+			Stderr:          item.Stderr,
+			StdoutTruncated: item.StdoutTruncated,
+			StderrTruncated: item.StderrTruncated,
+			TimedOut:        item.TimedOut,
+			DurationMS:      item.DurationMS,
+			StartedAt:       item.StartedAt,
+			FinishedAt:      item.FinishedAt,
+		})
+	}
+	return &api.SessionExecutionListResponse{
+		Items:    responses,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 func (s *SessionService) Reconcile(ctx context.Context) error {
-	sessions, err := s.store.ListSessions(ctx)
+	sessions, _, err := s.store.QuerySessions(ctx, store.SessionQuery{
+		Status: "active",
+		Pagination: store.Pagination{
+			Page:     1,
+			PageSize: 1000,
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -323,11 +399,8 @@ func (s *SessionService) Reconcile(ctx context.Context) error {
 		info, err := s.inspectSession(ctx, session)
 		if err != nil {
 			if errors.Is(err, runtime.ErrContainerNotFound) {
-				if session.WorkspacePath != "" {
-					_ = os.RemoveAll(session.WorkspacePath)
-				}
-				if delErr := s.store.DeleteSession(ctx, session.ID); delErr != nil {
-					return delErr
+				if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), true); markErr != nil {
+					return markErr
 				}
 				continue
 			}
@@ -338,6 +411,20 @@ func (s *SessionService) Reconcile(ctx context.Context) error {
 			if saveErr := s.store.SaveSession(ctx, session); saveErr != nil {
 				return saveErr
 			}
+		}
+	}
+	return nil
+}
+
+func (s *SessionService) markSessionStopped(ctx context.Context, session *model.Session, stoppedAt time.Time, removeWorkspace bool) error {
+	session.Status = model.SessionStatusStopped
+	session.StoppedAt = stoppedAt.UTC()
+	if err := s.store.SaveSession(ctx, session); err != nil {
+		return err
+	}
+	if removeWorkspace && session.WorkspacePath != "" {
+		if err := os.RemoveAll(session.WorkspacePath); err != nil {
+			return fmt.Errorf("delete workspace: %w", err)
 		}
 	}
 	return nil
@@ -423,8 +510,49 @@ func executeResponse(sessionID string, result runtime.ExecResult) *api.ExecuteSe
 		Stdout:     result.Stdout,
 		Stderr:     result.Stderr,
 		TimedOut:   result.TimedOut,
+		DurationMS: durationMilliseconds(result.StartedAt, result.FinishedAt),
 		StartedAt:  result.StartedAt,
 		FinishedAt: result.FinishedAt,
+	}
+}
+
+func executionFromResult(sessionID string, req api.ExecuteSessionRequest, execCwd string, result runtime.ExecResult, maxOutputBytes int) *model.SessionExecution {
+	stdout, stdoutTruncated := truncateLogOutput(result.Stdout, maxOutputBytes)
+	stderr, stderrTruncated := truncateLogOutput(result.Stderr, maxOutputBytes)
+	return &model.SessionExecution{
+		SessionID:       sessionID,
+		Command:         req.Command,
+		Args:            append([]string(nil), req.Args...),
+		Cwd:             execCwd,
+		TimeoutMS:       req.TimeoutMS,
+		ExitCode:        result.ExitCode,
+		Stdout:          stdout,
+		Stderr:          stderr,
+		StdoutTruncated: stdoutTruncated,
+		StderrTruncated: stderrTruncated,
+		TimedOut:        result.TimedOut,
+		DurationMS:      durationMilliseconds(result.StartedAt, result.FinishedAt),
+		StartedAt:       result.StartedAt,
+		FinishedAt:      result.FinishedAt,
+	}
+}
+
+func truncateLogOutput(output string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 || len(output) <= maxBytes {
+		return output, false
+	}
+	truncated := output[:maxBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated, true
+}
+
+func sessionToCreateResponse(session *model.Session, durationMS int64) *api.CreateSessionResponse {
+	response := sessionToResponse(session)
+	return &api.CreateSessionResponse{
+		SessionResponse: *response,
+		DurationMS:      durationMS,
 	}
 }
 
@@ -440,7 +568,32 @@ func sessionToResponse(session *model.Session) *api.SessionResponse {
 		Resources:       session.Resources,
 		Mounts:          append([]model.Mount(nil), session.Mounts...),
 		CreatedAt:       session.CreatedAt,
+		Status:          string(session.Status),
+		StoppedAt:       session.StoppedAt,
 	}
+}
+
+func durationMilliseconds(startedAt, finishedAt time.Time) int64 {
+	durationMS := finishedAt.Sub(startedAt).Milliseconds()
+	if durationMS < 0 {
+		return 0
+	}
+	return durationMS
+}
+
+func normalizePagination(p store.Pagination) (int, int) {
+	page := p.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := p.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	return page, pageSize
 }
 
 func cloneMap[V any](src map[string]V) map[string]V {

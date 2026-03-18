@@ -92,6 +92,13 @@ func (j *BuildJob) Clone() *BuildJob {
 	return &cp
 }
 
+type SessionStatus string
+
+const (
+	SessionStatusActive  SessionStatus = "active"
+	SessionStatusStopped SessionStatus = "stopped"
+)
+
 type Session struct {
 	ID              string            `json:"session_id"`
 	ContainerID     string            `json:"container_id,omitempty"`
@@ -103,7 +110,9 @@ type Session struct {
 	Mounts          []Mount           `json:"mounts,omitempty"`
 	Resources       ResourceSpec      `json:"resources"`
 	Labels          map[string]string `json:"labels,omitempty"`
+	Status          SessionStatus     `json:"status"`
 	CreatedAt       time.Time         `json:"created_at"`
+	StoppedAt       time.Time         `json:"stopped_at,omitempty"`
 }
 
 func (s *Session) Clone() *Session {
@@ -114,6 +123,33 @@ func (s *Session) Clone() *Session {
 	cp.Env = cloneMap(s.Env)
 	cp.Labels = cloneMap(s.Labels)
 	cp.Mounts = append([]Mount(nil), s.Mounts...)
+	return &cp
+}
+
+type SessionExecution struct {
+	ID              int64     `json:"id"`
+	SessionID       string    `json:"session_id"`
+	Command         string    `json:"command"`
+	Args            []string  `json:"args,omitempty"`
+	Cwd             string    `json:"cwd"`
+	TimeoutMS       int64     `json:"timeout_ms"`
+	ExitCode        int       `json:"exit_code"`
+	Stdout          string    `json:"stdout,omitempty"`
+	Stderr          string    `json:"stderr,omitempty"`
+	StdoutTruncated bool      `json:"stdout_truncated,omitempty"`
+	StderrTruncated bool      `json:"stderr_truncated,omitempty"`
+	TimedOut        bool      `json:"timed_out"`
+	DurationMS      int64     `json:"duration_ms"`
+	StartedAt       time.Time `json:"started_at"`
+	FinishedAt      time.Time `json:"finished_at"`
+}
+
+func (e *SessionExecution) Clone() *SessionExecution {
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	cp.Args = append([]string(nil), e.Args...)
 	return &cp
 }
 

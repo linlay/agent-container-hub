@@ -39,12 +39,15 @@ func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
 		t.Fatalf("envResp.Name = %q, want shell", envResp.Name)
 	}
 
-	createResp := doJSON[api.SessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+	createResp := doJSON[api.CreateSessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
 		SessionID:       "http-session",
 		EnvironmentName: "shell",
 	}, http.StatusOK, "")
 	if createResp.SessionID != "http-session" {
 		t.Fatalf("createResp.SessionID = %q, want http-session", createResp.SessionID)
+	}
+	if createResp.DurationMS < 0 {
+		t.Fatalf("createResp.DurationMS = %d, want non-negative", createResp.DurationMS)
 	}
 
 	executeResp := doJSON[api.ExecuteSessionResponse](t, handler, http.MethodPost, "/api/sessions/http-session/execute", api.ExecuteSessionRequest{
@@ -53,15 +56,39 @@ func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
 	if executeResp.Stdout != "ok" {
 		t.Fatalf("executeResp.Stdout = %q, want ok", executeResp.Stdout)
 	}
+	if executeResp.DurationMS != 95 {
+		t.Fatalf("executeResp.DurationMS = %d, want 95", executeResp.DurationMS)
+	}
 
 	sessions := doJSON[[]api.SessionResponse](t, handler, http.MethodGet, "/api/sessions", nil, http.StatusOK, "")
 	if len(sessions) != 1 {
 		t.Fatalf("sessions len = %d, want 1", len(sessions))
 	}
 
+	executions := doJSON[api.SessionExecutionListResponse](t, handler, http.MethodGet, "/api/sessions/http-session/executions?page=1&page_size=10", nil, http.StatusOK, "")
+	if len(executions.Items) != 1 {
+		t.Fatalf("executions len = %d, want 1", len(executions.Items))
+	}
+
 	stopResp := doJSON[api.StopSessionResponse](t, handler, http.MethodPost, "/api/sessions/http-session/stop", nil, http.StatusOK, "")
 	if stopResp.Status != "stopped" {
 		t.Fatalf("stopResp.Status = %q, want stopped", stopResp.Status)
+	}
+	if stopResp.DurationMS < 0 {
+		t.Fatalf("stopResp.DurationMS = %d, want non-negative", stopResp.DurationMS)
+	}
+
+	activeAfterStop := doJSON[[]api.SessionResponse](t, handler, http.MethodGet, "/api/sessions", nil, http.StatusOK, "")
+	if len(activeAfterStop) != 0 {
+		t.Fatalf("activeAfterStop len = %d, want 0", len(activeAfterStop))
+	}
+
+	history := doJSON[api.SessionListResponse](t, handler, http.MethodGet, "/api/sessions/query?status=history&page=1&page_size=10", nil, http.StatusOK, "")
+	if len(history.Items) != 1 || history.Items[0].SessionID != "http-session" {
+		t.Fatalf("history items = %+v, want stopped session", history.Items)
+	}
+	if history.Items[0].StoppedAt.IsZero() {
+		t.Fatal("expected stopped history item to include stopped_at")
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -70,8 +97,38 @@ func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", recorder.Code)
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte("Agent Container Hub Console")) {
-		t.Fatalf("GET / body = %q, want console html", recorder.Body.String())
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("Session Console")) {
+		t.Fatalf("GET / body = %q, want session console html", recorder.Body.String())
+	}
+
+	sessionsPageReq := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	sessionsPageRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(sessionsPageRecorder, sessionsPageReq)
+	if sessionsPageRecorder.Code != http.StatusOK {
+		t.Fatalf("GET /sessions status = %d, want 200", sessionsPageRecorder.Code)
+	}
+	if !bytes.Contains(sessionsPageRecorder.Body.Bytes(), []byte("/ui/sessions.js")) {
+		t.Fatalf("GET /sessions body = %q, want sessions asset reference", sessionsPageRecorder.Body.String())
+	}
+
+	environmentsPageReq := httptest.NewRequest(http.MethodGet, "/environments", nil)
+	environmentsPageRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(environmentsPageRecorder, environmentsPageReq)
+	if environmentsPageRecorder.Code != http.StatusOK {
+		t.Fatalf("GET /environments status = %d, want 200", environmentsPageRecorder.Code)
+	}
+	if !bytes.Contains(environmentsPageRecorder.Body.Bytes(), []byte("/ui/environments.js")) {
+		t.Fatalf("GET /environments body = %q, want environments asset reference", environmentsPageRecorder.Body.String())
+	}
+
+	assetReq := httptest.NewRequest(http.MethodGet, "/ui/styles.css", nil)
+	assetRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(assetRecorder, assetReq)
+	if assetRecorder.Code != http.StatusOK {
+		t.Fatalf("GET /ui/styles.css status = %d, want 200", assetRecorder.Code)
+	}
+	if contentType := assetRecorder.Header().Get("Content-Type"); contentType == "" || !bytes.Contains([]byte(contentType), []byte("text/css")) {
+		t.Fatalf("GET /ui/styles.css content-type = %q, want text/css", contentType)
 	}
 }
 
@@ -97,6 +154,18 @@ func TestAuthProtectsAppAndAPI(t *testing.T) {
 		t.Fatalf("Location = %q, want /login", location)
 	}
 
+	for _, path := range []string{"/sessions", "/environments"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusFound {
+			t.Fatalf("GET %s status = %d, want 302", path, recorder.Code)
+		}
+		if location := recorder.Header().Get("Location"); location != "/login" {
+			t.Fatalf("GET %s location = %q, want /login", path, location)
+		}
+	}
+
 	loginResp := doJSON[map[string]string](t, handler, http.MethodPost, "/api/auth/login", api.LoginRequest{Token: "secret"}, http.StatusOK, "")
 	if loginResp["status"] != "ok" {
 		t.Fatalf("loginResp = %+v, want ok", loginResp)
@@ -115,6 +184,14 @@ func TestAuthProtectsAppAndAPI(t *testing.T) {
 	}
 	if cookies[0].Name != authCookieName {
 		t.Fatalf("cookie name = %q, want %q", cookies[0].Name, authCookieName)
+	}
+
+	authenticatedAssetReq := httptest.NewRequest(http.MethodGet, "/ui/common.js", nil)
+	authenticatedAssetReq.Header.Set("Authorization", "Bearer secret")
+	authenticatedAssetRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(authenticatedAssetRecorder, authenticatedAssetReq)
+	if authenticatedAssetRecorder.Code != http.StatusOK {
+		t.Fatalf("GET /ui/common.js status = %d, want 200", authenticatedAssetRecorder.Code)
 	}
 }
 
@@ -158,7 +235,10 @@ func TestTargetedEnvironmentReadIgnoresUnrelatedInvalidYAML(t *testing.T) {
 	if envResp.Name != "shell" {
 		t.Fatalf("envResp.Name = %q, want shell", envResp.Name)
 	}
-	createResp := doJSON[api.SessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+	if envResp.YAML == "" {
+		t.Fatal("expected GET /api/environments/{name} to include yaml")
+	}
+	createResp := doJSON[api.CreateSessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
 		SessionID:       "targeted",
 		EnvironmentName: "shell",
 	}, http.StatusOK, "")
@@ -215,6 +295,8 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 		BuildRoot:             filepath.Join(tempDir, "builds"),
 		AllowedMountRoots:     []string{filepath.Join(tempDir, "workspaces"), filepath.Join(tempDir, "builds")},
 		DefaultCommandTimeout: time.Second,
+		EnableExecLogPersist:  true,
+		ExecLogMaxOutputBytes: 65536,
 	}
 	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspaces) error = %v", err)
@@ -237,8 +319,8 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 		execResult: runtime.ExecResult{
 			ExitCode:   0,
 			Stdout:     "ok",
-			StartedAt:  time.Now().UTC(),
-			FinishedAt: time.Now().UTC(),
+			StartedAt:  time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC),
+			FinishedAt: time.Date(2026, time.March, 17, 12, 38, 34, 95*int(time.Millisecond), time.UTC),
 		},
 		buildResult: runtime.BuildResult{
 			Output:     "built",

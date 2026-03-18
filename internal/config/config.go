@@ -19,6 +19,8 @@ type Config struct {
 	Engine                string
 	AllowedMountRoots     []string
 	DefaultCommandTimeout time.Duration
+	EnableExecLogPersist  bool
+	ExecLogMaxOutputBytes int
 }
 
 func Load() (Config, error) {
@@ -35,6 +37,8 @@ func Load() (Config, error) {
 		BuildRoot:             getEnv("BUILD_ROOT", filepath.Join(cwd, "data", "builds")),
 		Engine:                firstNonEmpty(strings.TrimSpace(os.Getenv("ENGINE")), strings.TrimSpace(os.Getenv("RUNTIME"))),
 		DefaultCommandTimeout: getEnvDuration("DEFAULT_COMMAND_TIMEOUT", 30*time.Second),
+		EnableExecLogPersist:  getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
+		ExecLogMaxOutputBytes: getEnvInt("EXEC_LOG_MAX_OUTPUT_BYTES", 65536),
 	}
 	allowedRoots := strings.TrimSpace(os.Getenv("ALLOWED_MOUNT_ROOTS"))
 	if allowedRoots == "" {
@@ -86,6 +90,9 @@ func (c Config) Validate() error {
 	if c.StateDBPath == "" || c.ConfigRoot == "" || c.WorkspaceRoot == "" || c.BuildRoot == "" {
 		return fmt.Errorf("state paths are required")
 	}
+	if c.ExecLogMaxOutputBytes < 0 {
+		return fmt.Errorf("EXEC_LOG_MAX_OUTPUT_BYTES must be >= 0")
+	}
 	return nil
 }
 
@@ -103,6 +110,33 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	var parsed int
+	if _, err := fmt.Sscanf(value, "%d", &parsed); err != nil {
 		return fallback
 	}
 	return parsed
