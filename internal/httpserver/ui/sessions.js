@@ -10,9 +10,11 @@ import {
   showToast,
 } from "/ui/common.js";
 
+const DEFAULT_SESSION_STATUS_FILTER = "history";
+
 const state = {
   sessions: {
-    filters: { status: "active", session_id: "", environment_name: "" },
+    filters: { status: DEFAULT_SESSION_STATUS_FILTER, session_id: "", environment_name: "" },
     page: 1,
     pageSize: 20,
     total: 0,
@@ -70,6 +72,33 @@ const executionPageMeta = document.getElementById("execution-page-meta");
 const executeModalMeta = document.getElementById("execute-modal-meta");
 const quickExecuteContent = document.getElementById("quick-execute-content");
 const quickExecuteOpenLogsButton = document.getElementById("quick-execute-open-logs");
+
+const SESSION_ACTION_ICONS = {
+  view: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `,
+  "quick-execute": `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 7v10l8-5Z" fill="currentColor" stroke="none"></path>
+    </svg>
+  `,
+  executions: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 4h7l5 5v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"></path>
+      <path d="M15 4v5h5"></path>
+      <path d="M9 13h6"></path>
+      <path d="M9 17h6"></path>
+    </svg>
+  `,
+  stop: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2"></rect>
+    </svg>
+  `,
+};
 
 function buildSessionQueryString() {
   const params = new URLSearchParams({
@@ -140,6 +169,31 @@ function renderTemplateMountOptions() {
 
 function quickExecutePresetForEnvironment(environmentName) {
   return state.environmentsByName[environmentName]?.default_execute || {};
+}
+
+function renderSessionActionButton({
+  action,
+  label,
+  sessionID,
+  variant = "secondary",
+  disabled = false,
+  environmentName = "",
+}) {
+  return `
+    <button
+      class="${variant} icon-button"
+      type="button"
+      data-action="${escapeHTML(action)}"
+      data-session-id="${escapeHTML(sessionID)}"
+      ${environmentName ? `data-environment-name="${escapeHTML(environmentName)}"` : ""}
+      title="${escapeHTML(label)}"
+      aria-label="${escapeHTML(label)}"
+      ${disabled ? "disabled" : ""}
+    >
+      <span class="icon" aria-hidden="true">${SESSION_ACTION_ICONS[action] || ""}</span>
+      <span class="sr-only">${escapeHTML(label)}</span>
+    </button>
+  `;
 }
 
 async function refreshSessions(preserveSelection = true) {
@@ -377,11 +431,40 @@ function renderSessionTable() {
   sessionTableBody.innerHTML = state.sessions.items.map((item) => {
     const quickPreset = quickExecutePresetForEnvironment(item.environment_name);
     const canQuickExecute = Boolean((quickPreset.command || "").trim());
+    const actionButtons = [
+      renderSessionActionButton({
+        action: "view",
+        label: "View session details",
+        sessionID: item.session_id,
+        variant: "ghost",
+      }),
+      renderSessionActionButton({
+        action: "quick-execute",
+        label: canQuickExecute
+          ? "Quick execute preset command"
+          : "Quick execute unavailable for this environment",
+        sessionID: item.session_id,
+        environmentName: item.environment_name,
+        disabled: !canQuickExecute,
+      }),
+      renderSessionActionButton({
+        action: "executions",
+        label: "View execute logs",
+        sessionID: item.session_id,
+      }),
+    ];
+    if (item.status === "active") {
+      actionButtons.push(renderSessionActionButton({
+        action: "stop",
+        label: "Stop session",
+        sessionID: item.session_id,
+        variant: "danger",
+      }));
+    }
     return `
-      <tr class="${state.sessions.selectedID === item.session_id ? "selected" : ""}" data-row-session-id="${escapeHTML(item.session_id)}">
+      <tr class="${state.sessions.selectedID === item.session_id ? "selected" : ""}">
         <td>
           <strong>${escapeHTML(item.session_id)}</strong>
-          <div class="cell-meta">${escapeHTML(item.container_id || "")}</div>
         </td>
         <td>${escapeHTML(item.environment_name)}</td>
         <td>
@@ -393,28 +476,14 @@ function renderSessionTable() {
         </td>
         <td>${escapeHTML(formatTime(item.created_at))}</td>
         <td>${escapeHTML(formatTime(item.stopped_at))}</td>
-        <td>
-          <div class="actions">
-            <button class="ghost" data-action="view" data-session-id="${escapeHTML(item.session_id)}">View</button>
-            <button class="secondary" data-action="quick-execute" data-session-id="${escapeHTML(item.session_id)}" data-environment-name="${escapeHTML(item.environment_name)}" ${canQuickExecute ? "" : "disabled"}>Quick Execute</button>
-            <button class="secondary" data-action="executions" data-session-id="${escapeHTML(item.session_id)}">Execute Logs</button>
-            ${item.status === "active" ? `<button class="danger" data-action="stop" data-session-id="${escapeHTML(item.session_id)}">Stop</button>` : ""}
+        <td class="actions-cell">
+          <div class="actions table-actions">
+            ${actionButtons.join("")}
           </div>
         </td>
       </tr>
     `;
   }).join("");
-
-  sessionTableBody.querySelectorAll("[data-row-session-id]").forEach((row) => {
-    row.addEventListener("click", (event) => {
-      if (event.target.closest("button")) {
-        return;
-      }
-      openSessionDetail(row.dataset.rowSessionId).catch((error) => {
-        showToast(error.message, "error");
-      });
-    });
-  });
 
   sessionTableBody.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async (event) => {
@@ -732,6 +801,7 @@ async function stopSession(sessionID, reopenDetail, button) {
 async function initialize() {
   initializeShell("sessions");
   bindModalDismiss();
+  document.getElementById("session-filter-status").value = state.sessions.filters.status;
 
   createEnvironmentSelect.addEventListener("change", () => {
     state.createSession.selectedEnvironment = createEnvironmentSelect.value;
@@ -809,10 +879,10 @@ async function initialize() {
   });
 
   document.getElementById("reset-session-filter").addEventListener("click", async () => {
-    state.sessions.filters = { status: "active", session_id: "", environment_name: "" };
+    state.sessions.filters = { status: DEFAULT_SESSION_STATUS_FILTER, session_id: "", environment_name: "" };
     state.sessions.page = 1;
     state.sessions.pageSize = 20;
-    document.getElementById("session-filter-status").value = "active";
+    document.getElementById("session-filter-status").value = DEFAULT_SESSION_STATUS_FILTER;
     document.getElementById("session-filter-id").value = "";
     document.getElementById("session-filter-environment").value = "";
     document.getElementById("session-page-size").value = "20";
@@ -858,8 +928,6 @@ async function initialize() {
       sessionCreateOutput.textContent = JSON.stringify(result, null, 2);
       closeModal("create-session-backdrop");
       showToast(`Session ${result.session_id} created.`, "success");
-      state.sessions.filters.status = "active";
-      document.getElementById("session-filter-status").value = "active";
       state.sessions.page = 1;
       await refreshSessions(true);
       await openSessionDetail(result.session_id);

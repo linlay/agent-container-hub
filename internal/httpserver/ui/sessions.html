@@ -1,239 +1,380 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Agent Container Hub Sessions</title>
-  <link rel="stylesheet" href="/ui/styles.css">
-</head>
-<body>
-  <header class="page-header">
-    <div>
-      <h1>Session Console</h1>
-      <div class="meta">Operate active sessions, inspect snapshots, and review execution history.</div>
-    </div>
-    <div class="header-actions">
-      <nav class="tabs" aria-label="Console navigation">
-        <a class="tab" data-nav="sessions" href="/sessions">Sessions</a>
-        <a class="tab" data-nav="environments" href="/environments">Environments</a>
-      </nav>
-      <button class="secondary" id="logout">Sign out</button>
-    </div>
-  </header>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1" />
+		<title>Agent Container Hub Sessions</title>
+		<link rel="stylesheet" href="/ui/styles.css" />
+	</head>
+	<body>
+		<header class="page-header">
+			<div>
+				<h1>Session Console</h1>
+				<div class="meta">
+					Operate active sessions, inspect snapshots, and review
+					execution history.
+				</div>
+			</div>
+			<div class="header-actions">
+				<nav class="tabs" aria-label="Console navigation">
+					<a class="tab" data-nav="sessions" href="/sessions"
+						>Sessions</a
+					>
+					<a class="tab" data-nav="environments" href="/environments"
+						>Environments</a
+					>
+				</nav>
+				<button class="secondary" id="logout">Sign out</button>
+			</div>
+		</header>
 
-  <main class="shell">
-    <section class="panel">
-      <div class="card stack">
-        <div class="toolbar wrap">
-          <div>
-            <h2>Session Table</h2>
-            <div class="meta">Default shows active sessions. History stays queryable through filters and pagination.</div>
-          </div>
-          <div class="actions">
-            <button class="ghost" id="refresh-sessions">Refresh</button>
-            <button id="open-create-session">Create Session</button>
-          </div>
-        </div>
+		<main class="shell">
+			<section class="panel">
+				<div class="card stack">
+					<div class="toolbar wrap">
+						<div>
+							<h2>Session Table</h2>
+							<div class="meta">
+								Default shows history sessions. Active sessions
+								and the full list stay queryable through filters
+								and pagination.
+							</div>
+						</div>
+						<div class="actions">
+							<button class="ghost" id="refresh-sessions">
+								Refresh
+							</button>
+							<button id="open-create-session">
+								Create Session
+							</button>
+						</div>
+					</div>
 
-        <div class="row filters">
-          <label>Status
-            <select id="session-filter-status">
-              <option value="active">Active</option>
-              <option value="history">History</option>
-              <option value="all">All</option>
-            </select>
-          </label>
-          <label>Session ID
-            <input id="session-filter-id" placeholder="demo-shell">
-          </label>
-          <label>Environment
-            <input id="session-filter-environment" placeholder="shell">
-          </label>
-          <label>Page Size
-            <select id="session-page-size">
-              <option value="10">10</option>
-              <option value="20" selected>20</option>
-              <option value="50">50</option>
-            </select>
-          </label>
-          <div class="actions">
-            <button id="apply-session-filter">Apply</button>
-            <button class="secondary" id="reset-session-filter">Reset</button>
-          </div>
-        </div>
+					<div class="row filters">
+						<label
+							>Status
+							<select id="session-filter-status">
+								<option value="history" selected>History</option>
+								<option value="active">Active</option>
+								<option value="all">All</option>
+							</select>
+						</label>
+						<label
+							>Session ID
+							<input
+								id="session-filter-id"
+								placeholder="demo-shell"
+							/>
+						</label>
+						<label
+							>Environment
+							<input
+								id="session-filter-environment"
+								placeholder="shell"
+							/>
+						</label>
+						<label
+							>Page Size
+							<select id="session-page-size">
+								<option value="10">10</option>
+								<option value="20" selected>20</option>
+								<option value="50">50</option>
+							</select>
+						</label>
+						<div class="actions">
+							<button id="apply-session-filter">Apply</button>
+							<button class="secondary" id="reset-session-filter">
+								Reset
+							</button>
+						</div>
+					</div>
 
-        <div class="toolbar">
-          <div class="meta" id="session-list-meta">Loading sessions...</div>
-          <div class="meta" id="session-selection-meta">No session selected.</div>
-        </div>
+					<div class="toolbar">
+						<div class="meta" id="session-list-meta">
+							Loading sessions...
+						</div>
+						<div class="meta" id="session-selection-meta">
+							No session selected.
+						</div>
+					</div>
 
-        <div class="table-shell">
-          <table>
-            <thead>
-              <tr>
-                <th>Session ID</th>
-                <th>Environment</th>
-                <th>Status</th>
-                <th>Image</th>
-                <th>Created At</th>
-                <th>Stopped At</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="session-table-body"></tbody>
-          </table>
-        </div>
+					<div class="table-shell">
+						<table>
+							<thead>
+								<tr>
+									<th>Session ID</th>
+									<th>Environment</th>
+									<th>Status</th>
+									<th>Image</th>
+									<th>Created At</th>
+									<th>Stopped At</th>
+									<th class="actions-column">Actions</th>
+								</tr>
+							</thead>
+							<tbody id="session-table-body"></tbody>
+						</table>
+					</div>
 
-        <div class="pagination">
-          <button class="secondary" id="session-prev">Previous</button>
-          <span class="meta" id="session-page-meta">Page 1</span>
-          <button class="secondary" id="session-next">Next</button>
-        </div>
-      </div>
-    </section>
-  </main>
-  <div class="toast-container" id="toast-container"></div>
+					<div class="pagination">
+						<button class="secondary" id="session-prev">
+							Previous
+						</button>
+						<span class="meta" id="session-page-meta">Page 1</span>
+						<button class="secondary" id="session-next">
+							Next
+						</button>
+					</div>
+				</div>
+			</section>
+		</main>
+		<div class="toast-container" id="toast-container"></div>
 
-  <div class="modal-backdrop" id="create-session-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <h2>Create Session</h2>
-          <div class="meta">Create a new active session from an enabled registered environment with editable session mounts.</div>
-        </div>
-        <button class="secondary modal-close" data-close-modal="create-session-backdrop">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="stack">
-          <div class="row">
-            <label>Environment
-              <select id="create-environment"></select>
-            </label>
-            <label>Session ID
-              <input id="create-session-id" placeholder="optional-session-id">
-            </label>
-          </div>
+		<div class="modal-backdrop" id="create-session-backdrop">
+			<div class="modal">
+				<div class="modal-header">
+					<div>
+						<h2>Create Session</h2>
+						<div class="meta">
+							Create a new active session from an enabled
+							registered environment with editable session mounts.
+						</div>
+					</div>
+					<button
+						class="secondary modal-close"
+						data-close-modal="create-session-backdrop"
+					>
+						Close
+					</button>
+				</div>
+				<div class="modal-body">
+					<div class="stack">
+						<div class="row">
+							<label
+								>Environment
+								<select id="create-environment"></select>
+							</label>
+							<label
+								>Session ID
+								<input
+									id="create-session-id"
+									placeholder="optional-session-id"
+								/>
+							</label>
+						</div>
 
-          <div class="row">
-            <div class="checkbox-field">
-              <label class="checkbox-inline" for="create-chat-attach">
-                <input id="create-chat-attach" type="checkbox">
-                <span>Attach Chat Directory</span>
-              </label>
-              <div class="field-note">Enable this to mount a selected chat directory into `/tmp` for the new session.</div>
-            </div>
-            <label>Chat ID
-              <select id="create-chat-id" disabled>
-                <option value="">No chats available</option>
-              </select>
-            </label>
-          </div>
+						<div class="row">
+							<div class="checkbox-field">
+								<label
+									class="checkbox-inline"
+									for="create-chat-attach"
+								>
+									<input
+										id="create-chat-attach"
+										type="checkbox"
+									/>
+									<span>Attach Chat Directory</span>
+								</label>
+								<div class="field-note">
+									Enable this to mount a selected chat
+									directory into `/tmp` for the new session.
+								</div>
+							</div>
+							<label
+								>Chat ID
+								<select id="create-chat-id" disabled>
+									<option value="">No chats available</option>
+								</select>
+							</label>
+						</div>
 
-          <div class="stack">
-            <div class="meta" id="create-environment-hint">Loading enabled environments...</div>
-            <div class="meta" id="create-template-hint">Loading mount template...</div>
-          </div>
+						<div class="stack">
+							<div class="meta" id="create-environment-hint">
+								Loading enabled environments...
+							</div>
+							<div class="meta" id="create-template-hint">
+								Loading mount template...
+							</div>
+						</div>
 
-          <div class="stack">
-            <div class="toolbar wrap">
-              <div>
-                <h3>Session Mounts</h3>
-                <div class="meta">Mounts are only included when you add them here. Template mounts stay available as shortcuts, and `/workspace` stays reserved for the auto workspace mount.</div>
-              </div>
-              <div class="actions">
-                <select id="template-mount-select" aria-label="Template mount shortcut">
-                  <option value="">No template mounts available</option>
-                </select>
-                <button class="secondary" id="add-template-mount">Add Template Mount</button>
-                <button class="secondary" id="add-mount-row">Add Mount</button>
-              </div>
-            </div>
-            <div class="mount-editor-list" id="create-session-mounts"></div>
-          </div>
+						<div class="stack">
+							<div class="toolbar wrap">
+								<div>
+									<h3>Session Mounts</h3>
+									<div class="meta">
+										Mounts are only included when you add
+										them here. Template mounts stay
+										available as shortcuts, and `/workspace`
+										stays reserved for the auto workspace
+										mount.
+									</div>
+								</div>
+								<div class="actions">
+									<select
+										id="template-mount-select"
+										aria-label="Template mount shortcut"
+									>
+										<option value="">
+											No template mounts available
+										</option>
+									</select>
+									<button
+										class="secondary"
+										id="add-template-mount"
+									>
+										Add Template Mount
+									</button>
+									<button
+										class="secondary"
+										id="add-mount-row"
+									>
+										Add Mount
+									</button>
+								</div>
+							</div>
+							<div
+								class="mount-editor-list"
+								id="create-session-mounts"
+							></div>
+						</div>
 
-          <pre id="session-create-output">No session created yet.</pre>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="secondary" data-close-modal="create-session-backdrop">Cancel</button>
-        <button id="create-session">Create Session</button>
-      </div>
-    </div>
-  </div>
+						<pre id="session-create-output">
+No session created yet.</pre
+						>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button
+						class="secondary"
+						data-close-modal="create-session-backdrop"
+					>
+						Cancel
+					</button>
+					<button id="create-session">Create Session</button>
+				</div>
+			</div>
+		</div>
 
-  <div class="modal-backdrop" id="session-detail-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <h2>Session Details</h2>
-          <div class="meta">Session snapshot at create time, including mounts and resources.</div>
-        </div>
-        <div class="actions">
-          <button class="secondary modal-close" data-close-modal="session-detail-backdrop">Close</button>
-        </div>
-      </div>
-      <div class="modal-body">
-        <div class="stack" id="session-detail-content">
-          <div class="empty">Select a session from the table to inspect it.</div>
-        </div>
-      </div>
-      <div class="modal-footer" id="session-detail-footer">
-        <button class="secondary" disabled>View Execute</button>
-      </div>
-    </div>
-  </div>
+		<div class="modal-backdrop" id="session-detail-backdrop">
+			<div class="modal">
+				<div class="modal-header">
+					<div>
+						<h2>Session Details</h2>
+						<div class="meta">
+							Session snapshot at create time, including mounts
+							and resources.
+						</div>
+					</div>
+					<div class="actions">
+						<button
+							class="secondary modal-close"
+							data-close-modal="session-detail-backdrop"
+						>
+							Close
+						</button>
+					</div>
+				</div>
+				<div class="modal-body">
+					<div class="stack" id="session-detail-content">
+						<div class="empty">
+							Select a session from the table to inspect it.
+						</div>
+					</div>
+				</div>
+				<div class="modal-footer" id="session-detail-footer">
+					<button class="secondary" disabled>View Execute</button>
+				</div>
+			</div>
+		</div>
 
-  <div class="modal-backdrop" id="execute-log-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <h2>Execute Logs</h2>
-          <div class="meta">History list on the left, selected execution detail on the right.</div>
-        </div>
-        <button class="secondary modal-close" data-close-modal="execute-log-backdrop">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="stack">
-          <div class="toolbar">
-            <div class="meta" id="execute-modal-meta">No session selected.</div>
-            <div class="pagination">
-              <button class="secondary" id="execution-prev">Previous</button>
-              <span class="meta" id="execution-page-meta">Page 1</span>
-              <button class="secondary" id="execution-next">Next</button>
-            </div>
-          </div>
+		<div class="modal-backdrop" id="execute-log-backdrop">
+			<div class="modal">
+				<div class="modal-header">
+					<div>
+						<h2>Execute Logs</h2>
+						<div class="meta">
+							History list on the left, selected execution detail
+							on the right.
+						</div>
+					</div>
+					<button
+						class="secondary modal-close"
+						data-close-modal="execute-log-backdrop"
+					>
+						Close
+					</button>
+				</div>
+				<div class="modal-body">
+					<div class="stack">
+						<div class="toolbar">
+							<div class="meta" id="execute-modal-meta">
+								No session selected.
+							</div>
+							<div class="pagination">
+								<button class="secondary" id="execution-prev">
+									Previous
+								</button>
+								<span class="meta" id="execution-page-meta"
+									>Page 1</span
+								>
+								<button class="secondary" id="execution-next">
+									Next
+								</button>
+							</div>
+						</div>
 
-          <div class="split">
-            <div id="execution-history" class="execution-history"></div>
-            <div id="execution-detail" class="empty">Select an execution from the history list.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+						<div class="split">
+							<div
+								id="execution-history"
+								class="execution-history"
+							></div>
+							<div id="execution-detail" class="empty">
+								Select an execution from the history list.
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
 
-  <div class="modal-backdrop" id="quick-execute-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <h2>Quick Execute Result</h2>
-          <div class="meta">Runs the environment preset command directly from the session table.</div>
-        </div>
-        <div class="actions">
-          <button class="secondary modal-close" data-close-modal="quick-execute-backdrop">Close</button>
-        </div>
-      </div>
-      <div class="modal-body">
-        <div class="stack" id="quick-execute-content">
-          <div class="empty">Run quick execute from a session row to inspect the result.</div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="secondary" id="quick-execute-open-logs" disabled>View Execute Logs</button>
-      </div>
-    </div>
-  </div>
+		<div class="modal-backdrop" id="quick-execute-backdrop">
+			<div class="modal">
+				<div class="modal-header">
+					<div>
+						<h2>Quick Execute Result</h2>
+						<div class="meta">
+							Runs the environment preset command directly from
+							the session table.
+						</div>
+					</div>
+					<div class="actions">
+						<button
+							class="secondary modal-close"
+							data-close-modal="quick-execute-backdrop"
+						>
+							Close
+						</button>
+					</div>
+				</div>
+				<div class="modal-body">
+					<div class="stack" id="quick-execute-content">
+						<div class="empty">
+							Run quick execute from a session row to inspect the
+							result.
+						</div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button
+						class="secondary"
+						id="quick-execute-open-logs"
+						disabled
+					>
+						View Execute Logs
+					</button>
+				</div>
+			</div>
+		</div>
 
-  <script type="module" src="/ui/sessions.js"></script>
-</body>
+		<script type="module" src="/ui/sessions.js"></script>
+	</body>
 </html>
