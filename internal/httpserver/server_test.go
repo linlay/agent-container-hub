@@ -21,6 +21,7 @@ import (
 	"agent-container-hub/internal/runtime"
 	"agent-container-hub/internal/sandbox"
 	"agent-container-hub/internal/store"
+	"agent-container-hub/internal/util"
 )
 
 func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
@@ -467,10 +468,10 @@ func TestEnvironmentFileAPIListsGetsAndSavesFiles(t *testing.T) {
 		t.Fatalf("Dockerfile response = %+v", dockerfile)
 	}
 
-	saved := doJSON[api.EnvironmentFileResponse](t, handler, http.MethodPut, "/api/environments/shell/files/build.sh", api.PutEnvironmentFileRequest{
-		Content: "#!/bin/sh\necho shell\n",
+	saved := doJSON[api.EnvironmentFileResponse](t, handler, http.MethodPut, "/api/environments/shell/files/Makefile", api.PutEnvironmentFileRequest{
+		Content: "build:\n\t@echo shell\n",
 	}, http.StatusOK, "")
-	if saved.Path != "build.sh" || saved.Type != "script" {
+	if saved.Path != "Makefile" || saved.Type != "script" {
 		t.Fatalf("saved file = %+v", saved)
 	}
 
@@ -758,7 +759,7 @@ func (f *httpFakeRuntime) Create(_ context.Context, opts runtime.CreateOptions) 
 		Name:      opts.Name,
 		Image:     opts.Image,
 		State:     runtime.ContainerStopped,
-		Labels:    cloneMap(opts.Labels),
+		Labels:    util.CloneMap(opts.Labels),
 		CreatedAt: time.Now().UTC(),
 	}
 	f.containers[id] = info
@@ -829,15 +830,4 @@ func (f *httpFakeRuntime) lookup(idOrName string) (runtime.ContainerInfo, bool) 
 		}
 	}
 	return runtime.ContainerInfo{}, false
-}
-
-func cloneMap(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

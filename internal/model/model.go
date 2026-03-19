@@ -3,6 +3,8 @@ package model
 import (
 	"strings"
 	"time"
+
+	"agent-container-hub/internal/util"
 )
 
 type Mount struct {
@@ -53,7 +55,7 @@ func (e *Environment) Clone() *Environment {
 		return nil
 	}
 	cp := *e
-	cp.DefaultEnv = cloneMap(e.DefaultEnv)
+	cp.DefaultEnv = util.CloneMap(e.DefaultEnv)
 	cp.Mounts = append([]Mount(nil), e.Mounts...)
 	cp.DefaultExecute = e.DefaultExecute.Clone()
 	cp.Build = e.Build.Clone()
@@ -77,7 +79,7 @@ func (e *Environment) ImageRef() string {
 
 func (b BuildSpec) Clone() BuildSpec {
 	cp := b
-	cp.BuildArgs = cloneMap(b.BuildArgs)
+	cp.BuildArgs = util.CloneMap(b.BuildArgs)
 	cp.SmokeArgs = append([]string(nil), b.SmokeArgs...)
 	return cp
 }
@@ -88,15 +90,22 @@ func (p ExecutePreset) Clone() ExecutePreset {
 	return cp
 }
 
+type BuildJobStatus string
+
+const (
+	BuildJobStatusSucceeded BuildJobStatus = "succeeded"
+	BuildJobStatusFailed    BuildJobStatus = "failed"
+)
+
 type BuildJob struct {
-	ID              string    `json:"id"`
-	EnvironmentName string    `json:"environment_name"`
-	ImageRef        string    `json:"image_ref"`
-	Status          string    `json:"status"`
-	Output          string    `json:"output,omitempty"`
-	Error           string    `json:"error,omitempty"`
-	StartedAt       time.Time `json:"started_at"`
-	FinishedAt      time.Time `json:"finished_at"`
+	ID              string         `json:"id"`
+	EnvironmentName string         `json:"environment_name"`
+	ImageRef        string         `json:"image_ref"`
+	Status          BuildJobStatus `json:"status"`
+	Output          string         `json:"output,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	StartedAt       time.Time      `json:"started_at"`
+	FinishedAt      time.Time      `json:"finished_at"`
 }
 
 func (j *BuildJob) Clone() *BuildJob {
@@ -135,8 +144,8 @@ func (s *Session) Clone() *Session {
 		return nil
 	}
 	cp := *s
-	cp.Env = cloneMap(s.Env)
-	cp.Labels = cloneMap(s.Labels)
+	cp.Env = util.CloneMap(s.Env)
+	cp.Labels = util.CloneMap(s.Labels)
 	cp.Mounts = append([]Mount(nil), s.Mounts...)
 	return &cp
 }
@@ -166,15 +175,4 @@ func (e *SessionExecution) Clone() *SessionExecution {
 	cp := *e
 	cp.Args = append([]string(nil), e.Args...)
 	return &cp
-}
-
-func cloneMap[V any](src map[string]V) map[string]V {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]V, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

@@ -558,7 +558,7 @@ func TestBuildEnvironmentStoresSuccessfulJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildEnvironment() error = %v", err)
 	}
-	if job.Status != buildStatusSucceeded {
+	if job.Status != string(model.BuildJobStatusSucceeded) {
 		t.Fatalf("BuildEnvironment() status = %q, want succeeded", job.Status)
 	}
 	if got := fake.lastCreate.Labels[runtime.ManagedByLabel]; got != "agent-container-hub" {
@@ -597,7 +597,7 @@ func TestBuildEnvironmentPreservesFailedBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildEnvironment() error = %v", err)
 	}
-	if job.Status != buildStatusFailed || job.Error == "" {
+	if job.Status != string(model.BuildJobStatusFailed) || job.Error == "" {
 		t.Fatalf("BuildEnvironment() = %+v, want failed job with error", job)
 	}
 }
@@ -1242,6 +1242,113 @@ func TestStopLogsRuntimeFailure(t *testing.T) {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("logs = %s, want %s", logText, want)
 		}
+	}
+}
+
+func TestStopCleansUpSessionLock(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "cleanup-stop",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(services.sessions.locks) != 1 {
+		t.Fatalf("locks len after create = %d, want 1", len(services.sessions.locks))
+	}
+
+	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if len(services.sessions.locks) != 0 {
+		t.Fatalf("locks len after stop = %d, want 0", len(services.sessions.locks))
+	}
+}
+
+func TestReconcileCleansUpSessionLock(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "cleanup-reconcile",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	fake.mu.Lock()
+	delete(fake.containers, created.ContainerID)
+	fake.mu.Unlock()
+
+	if err := services.sessions.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(services.sessions.locks) != 0 {
+		t.Fatalf("locks len after reconcile = %d, want 0", len(services.sessions.locks))
+	}
+
+	stored, err := services.sessions.Get(context.Background(), created.SessionID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if stored.Status != string(model.SessionStatusStopped) {
+		t.Fatalf("stored.Status = %q, want stopped", stored.Status)
+	}
+}
+
+func TestScheduleLockCleanupDoesNotDeleteHeldLock(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	release, acquired := services.sessions.tryLock("held-lock")
+	if !acquired {
+		t.Fatal("tryLock() acquired = false, want true")
+	}
+	services.sessions.scheduleLockCleanup("held-lock")
+
+	secondRelease, secondAcquired := services.sessions.tryLock("held-lock")
+	if secondAcquired {
+		secondRelease()
+		t.Fatal("tryLock() acquired a second lock after cleanup scheduling, want held lock to remain exclusive")
+	}
+
+	release()
+	if len(services.sessions.locks) != 0 {
+		t.Fatalf("locks len after release = %d, want 0", len(services.sessions.locks))
 	}
 }
 

@@ -178,8 +178,8 @@ func TestFileEnvironmentStoreListReadAndWriteEnvironmentFiles(t *testing.T) {
 		t.Fatalf("SaveEnvironment() error = %v", err)
 	}
 
-	if err := store.WriteEnvironmentFile(context.Background(), "shell", "build.sh", []byte("#!/bin/sh\necho shell\n")); err != nil {
-		t.Fatalf("WriteEnvironmentFile(build.sh) error = %v", err)
+	if err := store.WriteEnvironmentFile(context.Background(), "shell", "Makefile", []byte("build:\n\t@echo shell\n")); err != nil {
+		t.Fatalf("WriteEnvironmentFile(Makefile) error = %v", err)
 	}
 	if err := store.WriteEnvironmentFile(context.Background(), "shell", "scripts/check.sh", []byte("#!/bin/sh\ntrue\n")); err != nil {
 		t.Fatalf("WriteEnvironmentFile(scripts/check.sh) error = %v", err)

@@ -2,34 +2,34 @@ package sandbox
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/config"
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/runtime"
 	"agent-container-hub/internal/store"
+	"agent-container-hub/internal/util"
 )
 
 var (
-	ErrValidation  = errors.New("validation failed")
-	ErrBusy        = errors.New("session busy")
-	ErrConflict    = errors.New("session configuration conflict")
-	validSessionID = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
+	ErrValidation = errors.New("validation failed")
+	ErrBusy       = errors.New("session busy")
+	ErrConflict   = errors.New("session configuration conflict")
 )
+
+type sessionLock struct {
+	mu               sync.Mutex
+	cleanupRequested bool
+}
 
 type SessionService struct {
 	cfg     config.Config
@@ -38,7 +38,7 @@ type SessionService struct {
 	runtime runtime.Provider
 	logger  *slog.Logger
 	lockMu  sync.Mutex
-	locks   map[string]*sync.Mutex
+	locks   map[string]*sessionLock
 }
 
 func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
@@ -51,7 +51,7 @@ func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.Envi
 		envs:    envs,
 		runtime: provider,
 		logger:  logger,
-		locks:   make(map[string]*sync.Mutex),
+		locks:   make(map[string]*sessionLock),
 	}
 }
 
@@ -108,7 +108,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		return nil, err
 	}
 
-	containerLabels := cloneMap(req.Labels)
+	containerLabels := util.CloneMap(req.Labels)
 	if containerLabels == nil {
 		containerLabels = make(map[string]string)
 	}
@@ -121,7 +121,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		Name:      sessionID,
 		Image:     environment.ImageRef(),
 		Cwd:       sessionDefaultCwd(environment.DefaultCwd),
-		Env:       cloneMap(environment.DefaultEnv),
+		Env:       util.CloneMap(environment.DefaultEnv),
 		Mounts:    mounts,
 		Resources: environment.Resources,
 		Labels:    containerLabels,
@@ -161,10 +161,10 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		Image:           environment.ImageRef(),
 		DefaultCwd:      sessionDefaultCwd(environment.DefaultCwd),
 		WorkspacePath:   workspacePath,
-		Env:             cloneMap(environment.DefaultEnv),
+		Env:             util.CloneMap(environment.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), mounts...),
 		Resources:       environment.Resources,
-		Labels:          cloneMap(req.Labels),
+		Labels:          util.CloneMap(req.Labels),
 		Status:          model.SessionStatusActive,
 		CreatedAt:       time.Now().UTC(),
 	}
@@ -430,7 +430,7 @@ func (s *SessionService) Query(ctx context.Context, query store.SessionQuery) (*
 	if err != nil {
 		return nil, err
 	}
-	page, pageSize := normalizePagination(query.Pagination)
+	page, pageSize := store.NormalizePagination(query.Pagination)
 	responses := make([]*api.SessionResponse, 0, len(items))
 	for _, item := range items {
 		responses = append(responses, sessionToResponse(item))
@@ -463,7 +463,7 @@ func (s *SessionService) ListExecutions(ctx context.Context, sessionID string, p
 	if err != nil {
 		return nil, err
 	}
-	page, pageSize := normalizePagination(pagination)
+	page, pageSize := store.NormalizePagination(pagination)
 	responses := make([]*api.SessionExecutionResponse, 0, len(items))
 	for _, item := range items {
 		responses = append(responses, &api.SessionExecutionResponse{
@@ -530,77 +530,16 @@ func (s *SessionService) markSessionStopped(ctx context.Context, session *model.
 	if err := s.store.SaveSession(ctx, session); err != nil {
 		return err
 	}
+
+	var workspaceErr error
 	if removeWorkspace && session.WorkspacePath != "" {
 		if err := os.RemoveAll(session.WorkspacePath); err != nil {
-			return fmt.Errorf("delete workspace: %w", err)
-		}
-	}
-	return nil
-}
-
-func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []model.Mount, workspacePath string) ([]model.Mount, error) {
-	normalizedEnvMounts, err := s.normalizeMountList(environmentMounts)
-	if err != nil {
-		return nil, err
-	}
-	normalizedRequestMounts, err := s.normalizeMountList(requestMounts)
-	if err != nil {
-		return nil, err
-	}
-
-	workspaceMount := model.Mount{
-		Source:      runtime.NormalizeMountSource(workspacePath),
-		Destination: runtime.DefaultMountPath,
-	}
-
-	destinations := map[string]struct{}{
-		workspaceMount.Destination: {},
-	}
-	for _, mount := range normalizedEnvMounts {
-		if err := validateMountDestination(mount.Destination, destinations); err != nil {
-			return nil, err
-		}
-	}
-	for _, mount := range normalizedRequestMounts {
-		if mount.Destination == runtime.DefaultMountPath {
-			return nil, fmt.Errorf("%w: mount destination %s is reserved for the workspace", ErrValidation, runtime.DefaultMountPath)
-		}
-		if err := validateMountDestination(mount.Destination, destinations); err != nil {
-			return nil, err
+			workspaceErr = fmt.Errorf("delete workspace: %w", err)
 		}
 	}
 
-	mounts := append([]model.Mount(nil), normalizedEnvMounts...)
-	mounts = append(mounts, normalizedRequestMounts...)
-	mounts = append(mounts, workspaceMount)
-	return mounts, nil
-}
-
-func (s *SessionService) normalizeMountList(mounts []model.Mount) ([]model.Mount, error) {
-	normalized := make([]model.Mount, 0, len(mounts))
-	for _, mount := range mounts {
-		source := strings.TrimSpace(mount.Source)
-		if source == "" {
-			return nil, fmt.Errorf("%w: mount source is required", ErrValidation)
-		}
-		destination := normalizeContainerPath(mount.Destination)
-		if destination == "" {
-			return nil, fmt.Errorf("%w: mount destination is required", ErrValidation)
-		}
-		normalizedSource := runtime.NormalizeMountSource(source)
-		if _, err := os.Stat(normalizedSource); err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("%w: mount source does not exist: %s", ErrValidation, normalizedSource)
-			}
-			return nil, fmt.Errorf("stat mount source %s: %w", normalizedSource, err)
-		}
-		normalized = append(normalized, model.Mount{
-			Source:      normalizedSource,
-			Destination: destination,
-			ReadOnly:    mount.ReadOnly,
-		})
-	}
-	return normalized, nil
+	s.scheduleLockCleanup(session.ID)
+	return workspaceErr
 }
 
 func (s *SessionService) inspectSession(ctx context.Context, session *model.Session) (runtime.ContainerInfo, error) {
@@ -618,165 +557,48 @@ func (s *SessionService) tryLock(id string) (func(), bool) {
 	s.lockMu.Lock()
 	lock, ok := s.locks[id]
 	if !ok {
-		lock = &sync.Mutex{}
+		lock = &sessionLock{}
 		s.locks[id] = lock
 	}
 	s.lockMu.Unlock()
-	if !lock.TryLock() {
+
+	if !lock.mu.TryLock() {
 		return nil, false
 	}
-	return lock.Unlock, true
+	return func() {
+		s.releaseLock(id, lock)
+	}, true
 }
 
-func timeoutFor(timeoutMS int64, fallback time.Duration) time.Duration {
-	if timeoutMS <= 0 {
-		return fallback
+func (s *SessionService) releaseLock(id string, lock *sessionLock) {
+	lock.mu.Unlock()
+
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+
+	current, ok := s.locks[id]
+	if !ok || current != lock || !lock.cleanupRequested {
+		return
 	}
-	return time.Duration(timeoutMS) * time.Millisecond
+	if !lock.mu.TryLock() {
+		return
+	}
+	delete(s.locks, id)
+	lock.mu.Unlock()
 }
 
-func validateMountDestination(destination string, seen map[string]struct{}) error {
-	if _, exists := seen[destination]; exists {
-		return fmt.Errorf("%w: mount destination %s is duplicated", ErrValidation, destination)
-	}
-	seen[destination] = struct{}{}
-	return nil
-}
+func (s *SessionService) scheduleLockCleanup(id string) {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
 
-func normalizeContainerPath(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
+	lock, ok := s.locks[id]
+	if !ok {
+		return
 	}
-	clean := path.Clean(value)
-	if clean == "." {
-		return ""
+	lock.cleanupRequested = true
+	if !lock.mu.TryLock() {
+		return
 	}
-	return clean
-}
-
-func sessionDefaultCwd(cwd string) string {
-	if strings.TrimSpace(cwd) == "" {
-		return runtime.DefaultMountPath
-	}
-	return cwd
-}
-
-func validateSessionID(sessionID string) error {
-	if !validSessionID.MatchString(strings.TrimSpace(sessionID)) {
-		return fmt.Errorf("%w: session_id must match %s", ErrValidation, validSessionID.String())
-	}
-	return nil
-}
-
-func generateID() (string, error) {
-	buf := make([]byte, 6)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
-}
-
-func executeResponse(sessionID string, result runtime.ExecResult) *api.ExecuteSessionResponse {
-	return &api.ExecuteSessionResponse{
-		SessionID:  sessionID,
-		ExitCode:   result.ExitCode,
-		Stdout:     result.Stdout,
-		Stderr:     result.Stderr,
-		TimedOut:   result.TimedOut,
-		DurationMS: durationMilliseconds(result.StartedAt, result.FinishedAt),
-		StartedAt:  result.StartedAt,
-		FinishedAt: result.FinishedAt,
-	}
-}
-
-func executionFromResult(sessionID string, req api.ExecuteSessionRequest, execCwd string, result runtime.ExecResult, maxOutputBytes int) *model.SessionExecution {
-	stdout, stdoutTruncated := truncateLogOutput(result.Stdout, maxOutputBytes)
-	stderr, stderrTruncated := truncateLogOutput(result.Stderr, maxOutputBytes)
-	return &model.SessionExecution{
-		SessionID:       sessionID,
-		Command:         req.Command,
-		Args:            append([]string(nil), req.Args...),
-		Cwd:             execCwd,
-		TimeoutMS:       req.TimeoutMS,
-		ExitCode:        result.ExitCode,
-		Stdout:          stdout,
-		Stderr:          stderr,
-		StdoutTruncated: stdoutTruncated,
-		StderrTruncated: stderrTruncated,
-		TimedOut:        result.TimedOut,
-		DurationMS:      durationMilliseconds(result.StartedAt, result.FinishedAt),
-		StartedAt:       result.StartedAt,
-		FinishedAt:      result.FinishedAt,
-	}
-}
-
-func truncateLogOutput(output string, maxBytes int) (string, bool) {
-	if maxBytes <= 0 || len(output) <= maxBytes {
-		return output, false
-	}
-	truncated := output[:maxBytes]
-	for len(truncated) > 0 && !utf8.ValidString(truncated) {
-		truncated = truncated[:len(truncated)-1]
-	}
-	return truncated, true
-}
-
-func sessionToCreateResponse(session *model.Session, durationMS int64) *api.CreateSessionResponse {
-	response := sessionToResponse(session)
-	return &api.CreateSessionResponse{
-		SessionResponse: *response,
-		DurationMS:      durationMS,
-	}
-}
-
-func sessionToResponse(session *model.Session) *api.SessionResponse {
-	return &api.SessionResponse{
-		SessionID:       session.ID,
-		EnvironmentName: session.EnvironmentName,
-		ContainerID:     session.ContainerID,
-		Image:           session.Image,
-		DefaultCwd:      session.DefaultCwd,
-		WorkspacePath:   session.WorkspacePath,
-		Labels:          cloneMap(session.Labels),
-		Resources:       session.Resources,
-		Mounts:          append([]model.Mount(nil), session.Mounts...),
-		CreatedAt:       session.CreatedAt,
-		Status:          string(session.Status),
-		StoppedAt:       session.StoppedAt,
-	}
-}
-
-func durationMilliseconds(startedAt, finishedAt time.Time) int64 {
-	durationMS := finishedAt.Sub(startedAt).Milliseconds()
-	if durationMS < 0 {
-		return 0
-	}
-	return durationMS
-}
-
-func normalizePagination(p store.Pagination) (int, int) {
-	page := p.Page
-	if page <= 0 {
-		page = 1
-	}
-	pageSize := p.PageSize
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-	return page, pageSize
-}
-
-func cloneMap[V any](src map[string]V) map[string]V {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]V, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
+	delete(s.locks, id)
+	lock.mu.Unlock()
 }

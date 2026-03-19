@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"agent-container-hub/internal/util"
 )
 
 type CLIProvider struct {
@@ -75,7 +77,7 @@ func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (Container
 		Name:      opts.Name,
 		Image:     opts.Image,
 		State:     ContainerStopped,
-		Labels:    cloneMap(opts.Labels),
+		Labels:    util.CloneMap(opts.Labels),
 		CreatedAt: time.Now().UTC(),
 	}, nil
 }
@@ -269,7 +271,7 @@ func parseInspect(raw string) ([]ContainerInfo, error) {
 			Name:      strings.TrimPrefix(item.Name, "/"),
 			Image:     image,
 			State:     parseContainerState(item.State.Status),
-			Labels:    cloneMap(item.Config.Labels),
+			Labels:    util.CloneMap(item.Config.Labels),
 			CreatedAt: createdAt.UTC(),
 		})
 	}
@@ -315,15 +317,4 @@ func NormalizeMountSource(path string) string {
 		return abs
 	}
 	return clean
-}
-
-func cloneMap[V any](src map[string]V) map[string]V {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]V, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

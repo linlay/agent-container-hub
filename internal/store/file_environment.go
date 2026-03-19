@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	environmentMetadataFile = "environment.yml"
-	environmentDockerfile   = "Dockerfile"
-	environmentBuildScript  = "build.sh"
+	environmentMetadataFile  = "environment.yml"
+	environmentDockerfile    = "Dockerfile"
+	environmentBuildMakefile = "Makefile"
 )
 
 var validEnvironmentFilename = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
@@ -132,7 +132,7 @@ func (s *FileEnvironmentStore) ListEnvironmentFiles(_ context.Context, name stri
 		return nil, fmt.Errorf("stat environment metadata: %w", err)
 	}
 
-	paths := []string{environmentMetadataFile, environmentDockerfile, environmentBuildScript}
+	paths := []string{environmentMetadataFile, environmentDockerfile, environmentBuildMakefile}
 	files := make([]EnvironmentFile, 0, len(paths))
 	for _, relPath := range paths {
 		file, err := s.readEnvironmentFile(dir, relPath)
@@ -350,12 +350,15 @@ func normalizeEnvironmentFilePath(relPath string) (string, error) {
 	if strings.HasPrefix(relPath, "/") {
 		return "", fmt.Errorf("%w: invalid environment file path %q", ErrNotFound, relPath)
 	}
-	cleanPath := pathClean(relPath)
+	cleanPath := filepath.ToSlash(filepath.Clean(strings.TrimSpace(relPath)))
+	if cleanPath == "." {
+		cleanPath = ""
+	}
 	if cleanPath == "." || cleanPath == "" || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." {
 		return "", fmt.Errorf("%w: invalid environment file path %q", ErrNotFound, relPath)
 	}
 	switch {
-	case cleanPath == environmentMetadataFile, cleanPath == environmentDockerfile, cleanPath == environmentBuildScript:
+	case cleanPath == environmentMetadataFile, cleanPath == environmentDockerfile, cleanPath == environmentBuildMakefile:
 		return cleanPath, nil
 	case strings.HasPrefix(cleanPath, "scripts/"), strings.HasPrefix(cleanPath, "curl/"):
 		return cleanPath, nil
@@ -370,19 +373,11 @@ func classifyEnvironmentFile(relPath string) string {
 		return "metadata"
 	case environmentDockerfile:
 		return "dockerfile"
-	case environmentBuildScript:
+	case environmentBuildMakefile:
 		return "script"
 	}
 	if strings.HasSuffix(relPath, ".sh") || strings.HasPrefix(relPath, "scripts/") || strings.HasPrefix(relPath, "curl/") {
 		return "script"
 	}
 	return "other"
-}
-
-func pathClean(value string) string {
-	value = filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
-	if value == "." {
-		return ""
-	}
-	return value
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -50,20 +51,6 @@ func validateSQLitePath(path string) error {
 	}
 	if info.Size() == 0 {
 		return nil
-	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open state db header: %w", err)
-	}
-	defer file.Close()
-
-	header := make([]byte, 16)
-	if _, err := file.Read(header); err != nil {
-		return fmt.Errorf("read state db header: %w", err)
-	}
-	if string(header) != "SQLite format 3\x00" {
-		return fmt.Errorf("state db %s is not a SQLite database; existing bbolt files are no longer supported, please point STATE_DB_PATH to a new SQLite file", path)
 	}
 	return nil
 }
@@ -202,7 +189,7 @@ func (s *SQLiteStore) ListSessions(ctx context.Context) ([]*model.Session, error
 }
 
 func (s *SQLiteStore) QuerySessions(_ context.Context, query SessionQuery) ([]*model.Session, int, error) {
-	page, pageSize := normalizePagination(query.Pagination)
+	page, pageSize := NormalizePagination(query.Pagination)
 	whereClauses := make([]string, 0, 3)
 	args := make([]any, 0, 6)
 
@@ -300,7 +287,7 @@ func (s *SQLiteStore) SaveSessionExecution(_ context.Context, execution *model.S
 }
 
 func (s *SQLiteStore) ListSessionExecutions(_ context.Context, sessionID string, pagination Pagination) ([]*model.SessionExecution, int, error) {
-	page, pageSize := normalizePagination(pagination)
+	page, pageSize := NormalizePagination(pagination)
 
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(1) FROM session_executions WHERE session_id = ?`, sessionID).Scan(&total); err != nil {
@@ -346,7 +333,7 @@ func (s *SQLiteStore) SaveBuildJob(_ context.Context, job *model.BuildJob) error
 			error=excluded.error,
 			started_at=excluded.started_at,
 			finished_at=excluded.finished_at
-	`, job.ID, job.EnvironmentName, job.ImageRef, job.Status, job.Output, job.Error,
+	`, job.ID, job.EnvironmentName, job.ImageRef, string(job.Status), job.Output, job.Error,
 		job.StartedAt.UTC().Format(time.RFC3339Nano), job.FinishedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("save build job: %w", err)
@@ -374,10 +361,12 @@ func (s *SQLiteStore) ListBuildJobs(_ context.Context, environmentName string) (
 	var jobs []*model.BuildJob
 	for rows.Next() {
 		var job model.BuildJob
+		var status string
 		var startedAt, finishedAt string
-		if err := rows.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &job.Status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("scan build job: %w", err)
 		}
+		job.Status = model.BuildJobStatus(status)
 		job.StartedAt = parseTime(startedAt)
 		job.FinishedAt = parseTime(finishedAt)
 		jobs = append(jobs, &job)
@@ -496,7 +485,7 @@ func unmarshalJSON(payload string, target any) error {
 	return json.Unmarshal([]byte(payload), target)
 }
 
-func normalizePagination(p Pagination) (int, int) {
+func NormalizePagination(p Pagination) (int, int) {
 	page := p.Page
 	if page <= 0 {
 		page = 1
@@ -530,15 +519,13 @@ func boolToInt(value bool) int {
 }
 
 func isEmptyJSONValue(value any) bool {
-	switch v := value.(type) {
-	case nil:
+	if value == nil {
 		return true
-	case map[string]string:
-		return len(v) == 0
-	case []model.Mount:
-		return len(v) == 0
-	case []string:
-		return len(v) == 0
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Map, reflect.Slice:
+		return v.Len() == 0
 	}
 	return false
 }

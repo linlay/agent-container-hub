@@ -23,8 +23,53 @@ func TestOpenRejectsLegacyNonSQLiteFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("Open() error = nil, want error")
 	}
-	if got := err.Error(); got == "" || !containsAll(got, "SQLite", "bbolt") {
-		t.Fatalf("Open() error = %q, want SQLite/bbolt hint", got)
+	if got := err.Error(); got == "" {
+		t.Fatal("Open() error = empty, want non-empty error")
+	}
+	if strings.Contains(err.Error(), "bbolt") {
+		t.Fatalf("Open() error = %q, want no legacy bbolt hint", err.Error())
+	}
+}
+
+func TestNormalizePagination(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    Pagination
+		wantPage int
+		wantSize int
+	}{
+		{
+			name:     "defaults",
+			input:    Pagination{},
+			wantPage: 1,
+			wantSize: 20,
+		},
+		{
+			name:     "clamps page size",
+			input:    Pagination{Page: 2, PageSize: 1000},
+			wantPage: 2,
+			wantSize: 100,
+		},
+		{
+			name:     "keeps valid values",
+			input:    Pagination{Page: 3, PageSize: 10},
+			wantPage: 3,
+			wantSize: 10,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotPage, gotSize := NormalizePagination(tc.input)
+			if gotPage != tc.wantPage || gotSize != tc.wantSize {
+				t.Fatalf("NormalizePagination(%+v) = (%d, %d), want (%d, %d)", tc.input, gotPage, gotSize, tc.wantPage, tc.wantSize)
+			}
+		})
 	}
 }
 

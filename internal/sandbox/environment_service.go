@@ -9,6 +9,7 @@ import (
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/store"
+	"agent-container-hub/internal/util"
 )
 
 type EnvironmentService struct {
@@ -46,7 +47,7 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		ImageRepository: strings.TrimSpace(req.ImageRepository),
 		ImageTag:        strings.TrimSpace(req.ImageTag),
 		DefaultCwd:      sessionDefaultCwd(req.DefaultCwd),
-		DefaultEnv:      cloneMap(req.DefaultEnv),
+		DefaultEnv:      util.CloneMap(req.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), req.Mounts...),
 		Resources:       req.Resources,
 		Enabled:         req.Enabled,
@@ -147,7 +148,7 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		ImageTag:        environment.ImageTag,
 		ImageRef:        environment.ImageRef(),
 		DefaultCwd:      environment.DefaultCwd,
-		DefaultEnv:      cloneMap(environment.DefaultEnv),
+		DefaultEnv:      util.CloneMap(environment.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), environment.Mounts...),
 		Resources:       environment.Resources,
 		Enabled:         environment.Enabled,

@@ -14,11 +14,7 @@ import (
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/runtime"
 	"agent-container-hub/internal/store"
-)
-
-const (
-	buildStatusSucceeded = "succeeded"
-	buildStatusFailed    = "failed"
+	"agent-container-hub/internal/util"
 )
 
 type BuildService struct {
@@ -65,7 +61,7 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 		ID:              "build-" + jobID,
 		EnvironmentName: environment.Name,
 		ImageRef:        environment.ImageRef(),
-		Status:          buildStatusFailed,
+		Status:          model.BuildJobStatusFailed,
 		StartedAt:       time.Now().UTC(),
 	}
 
@@ -84,7 +80,7 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 		ContextDir:     buildDir,
 		DockerfilePath: dockerfilePath,
 		Image:          environment.ImageRef(),
-		BuildArgs:      cloneMap(environment.Build.BuildArgs),
+		BuildArgs:      util.CloneMap(environment.Build.BuildArgs),
 	})
 	job.Output = result.Output
 	job.FinishedAt = result.FinishedAt
@@ -121,7 +117,7 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 		}
 	}
 
-	job.Status = buildStatusSucceeded
+	job.Status = model.BuildJobStatusSucceeded
 	if err := s.store.SaveBuildJob(ctx, job); err != nil {
 		return nil, err
 	}
@@ -144,7 +140,7 @@ func (s *BuildService) runSmokeCheck(ctx context.Context, environment *model.Env
 		Name:  "smoke-" + name,
 		Image: environment.ImageRef(),
 		Cwd:   sessionDefaultCwd(environment.DefaultCwd),
-		Env:   cloneMap(environment.DefaultEnv),
+		Env:   util.CloneMap(environment.DefaultEnv),
 		Mounts: []model.Mount{{
 			Source:      workspace,
 			Destination: runtime.DefaultMountPath,
@@ -182,7 +178,7 @@ func buildJobToResponse(job *model.BuildJob) *api.BuildJobResponse {
 		ID:              job.ID,
 		EnvironmentName: job.EnvironmentName,
 		ImageRef:        job.ImageRef,
-		Status:          job.Status,
+		Status:          string(job.Status),
 		Output:          job.Output,
 		Error:           job.Error,
 		StartedAt:       job.StartedAt,
