@@ -37,9 +37,6 @@ const state = {
     templateRoot: "",
     templateMounts: [],
     selectedTemplateMount: "",
-    chatIDs: [],
-    attachChat: false,
-    selectedChatID: "",
     mounts: [],
   },
   quickExecute: {
@@ -57,8 +54,6 @@ const sessionDetailContent = document.getElementById("session-detail-content");
 const sessionDetailFooter = document.getElementById("session-detail-footer");
 const sessionCreateOutput = document.getElementById("session-create-output");
 const createEnvironmentSelect = document.getElementById("create-environment");
-const createChatAttachCheckbox = document.getElementById("create-chat-attach");
-const createChatIDSelect = document.getElementById("create-chat-id");
 const createEnvironmentHint = document.getElementById("create-environment-hint");
 const createTemplateHint = document.getElementById("create-template-hint");
 const createSessionButton = document.getElementById("create-session");
@@ -224,8 +219,6 @@ async function refreshSessionCreateTemplate() {
   state.createSession.selectedTemplateMount = state.createSession.templateMounts[0]
     ? templateMountKey(state.createSession.templateMounts[0])
     : "";
-  state.createSession.chatIDs = Array.isArray(data.chat_ids) ? [...data.chat_ids] : [];
-  renderChatOptions();
   renderTemplateMountOptions();
   createTemplateHint.textContent = state.createSession.templateRoot
     ? `Template root: ${state.createSession.templateRoot}`
@@ -270,33 +263,14 @@ function renderCreateEnvironmentOptions(preferredName = "") {
   state.createSession.selectedEnvironment = selectedName;
 }
 
-function renderChatOptions() {
-  const chatIDs = state.createSession.chatIDs;
-  const options = chatIDs.length > 0
-    ? [`<option value="">Select chat directory</option>`, ...chatIDs.map((chatID) => `<option value="${escapeHTML(chatID)}">${escapeHTML(chatID)}</option>`)]
-    : [`<option value="">No chats available</option>`];
-
-  if (state.createSession.selectedChatID && !chatIDs.includes(state.createSession.selectedChatID)) {
-    state.createSession.selectedChatID = "";
-  }
-
-  createChatIDSelect.innerHTML = options.join("");
-  createChatAttachCheckbox.checked = state.createSession.attachChat;
-  createChatIDSelect.disabled = !state.createSession.attachChat || chatIDs.length === 0;
-  createChatIDSelect.value = state.createSession.selectedChatID || "";
-}
-
 function resetCreateSessionForm() {
   state.createSession.selectedEnvironment = preferredEnvironmentName();
-  state.createSession.attachChat = false;
-  state.createSession.selectedChatID = "";
   state.createSession.selectedTemplateMount = state.createSession.templateMounts[0]
     ? templateMountKey(state.createSession.templateMounts[0])
     : "";
   state.createSession.mounts = [];
   createEnvironmentSelect.value = state.createSession.selectedEnvironment || "";
   document.getElementById("create-session-id").value = "";
-  renderChatOptions();
   renderSessionMountEditor();
 }
 
@@ -317,19 +291,6 @@ function addSelectedTemplateMount() {
     return;
   }
   state.createSession.mounts.push({ ...mount });
-  renderSessionMountEditor();
-}
-
-function syncChatMount() {
-  state.createSession.mounts = state.createSession.mounts.filter((mount) => mount.origin !== "chat");
-  if (state.createSession.attachChat && state.createSession.selectedChatID && state.createSession.templateRoot) {
-    state.createSession.mounts.push({
-      source: `${state.createSession.templateRoot}/chats/${state.createSession.selectedChatID}`,
-      destination: "/tmp",
-      read_only: false,
-      origin: "chat",
-    });
-  }
   renderSessionMountEditor();
 }
 
@@ -389,13 +350,7 @@ function renderSessionMountEditor() {
   createSessionMounts.querySelectorAll("[data-remove-mount]").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.dataset.removeMount);
-      const mount = state.createSession.mounts[index];
       state.createSession.mounts.splice(index, 1);
-      if (mount?.origin === "chat") {
-        state.createSession.attachChat = false;
-        state.createSession.selectedChatID = "";
-        renderChatOptions();
-      }
       renderSessionMountEditor();
     });
   });
@@ -805,20 +760,6 @@ async function initialize() {
 
   createEnvironmentSelect.addEventListener("change", () => {
     state.createSession.selectedEnvironment = createEnvironmentSelect.value;
-  });
-
-  createChatAttachCheckbox.addEventListener("change", () => {
-    state.createSession.attachChat = createChatAttachCheckbox.checked;
-    if (!state.createSession.attachChat) {
-      state.createSession.selectedChatID = "";
-    }
-    renderChatOptions();
-    syncChatMount();
-  });
-
-  createChatIDSelect.addEventListener("change", () => {
-    state.createSession.selectedChatID = createChatIDSelect.value;
-    syncChatMount();
   });
 
   document.getElementById("add-mount-row").addEventListener("click", (event) => {

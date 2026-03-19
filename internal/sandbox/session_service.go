@@ -27,8 +27,7 @@ var (
 )
 
 type sessionLock struct {
-	mu               sync.Mutex
-	cleanupRequested bool
+	_ struct{}
 }
 
 type SessionService struct {
@@ -38,7 +37,7 @@ type SessionService struct {
 	runtime runtime.Provider
 	logger  *slog.Logger
 	lockMu  sync.Mutex
-	locks   map[string]*sessionLock
+	locks   map[string]struct{}
 }
 
 func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
@@ -51,7 +50,7 @@ func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.Envi
 		envs:    envs,
 		runtime: provider,
 		logger:  logger,
-		locks:   make(map[string]*sessionLock),
+		locks:   make(map[string]struct{}),
 	}
 }
 
@@ -71,6 +70,9 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 	}
 	if !environment.Enabled {
 		return nil, fmt.Errorf("%w: environment is disabled", ErrValidation)
+	}
+	if err := util.ValidateEnvMap(environment.DefaultEnv, "default_env"); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
 	}
 
 	sessionID := strings.TrimSpace(req.SessionID)
@@ -186,7 +188,6 @@ func (s *SessionService) CreateTemplate(context.Context) (*api.SessionCreateTemp
 	response := &api.SessionCreateTemplateResponse{
 		MountTemplateRoot: root,
 		DefaultMounts:     []model.Mount{},
-		ChatIDs:           []string{},
 	}
 	if root == "" {
 		return response, nil
@@ -212,25 +213,6 @@ func (s *SessionService) CreateTemplate(context.Context) (*api.SessionCreateTemp
 	sort.Slice(response.DefaultMounts, func(i, j int) bool {
 		return response.DefaultMounts[i].Destination < response.DefaultMounts[j].Destination
 	})
-
-	chatEntries, err := os.ReadDir(filepath.Join(root, "chats"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return response, nil
-		}
-		return nil, fmt.Errorf("read session mount template chats: %w", err)
-	}
-	for _, entry := range chatEntries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := strings.TrimSpace(entry.Name())
-		if name == "" {
-			continue
-		}
-		response.ChatIDs = append(response.ChatIDs, name)
-	}
-	sort.Strings(response.ChatIDs)
 	return response, nil
 }
 
@@ -292,6 +274,12 @@ func (s *SessionService) execOnSession(ctx context.Context, session *model.Sessi
 	if err == nil {
 		return result, nil
 	}
+	if errors.Is(err, runtime.ErrContainerNotFound) || errors.Is(err, runtime.ErrContainerNotRunning) {
+		if markErr := s.markSessionUnavailable(ctx, session, time.Now().UTC()); markErr != nil {
+			return runtime.ExecResult{}, markErr
+		}
+		return runtime.ExecResult{}, fmt.Errorf("%w: session is no longer executable; recreate the session", ErrConflict)
+	}
 	if !errors.Is(err, runtime.ErrContainerNotFound) && !errors.Is(err, runtime.ErrContainerNotRunning) {
 		s.logger.Error("session exec failed",
 			"session_id", session.ID,
@@ -302,54 +290,7 @@ func (s *SessionService) execOnSession(ctx context.Context, session *model.Sessi
 		)
 		return runtime.ExecResult{}, err
 	}
-
-	info, inspectErr := s.inspectSession(ctx, session)
-	if inspectErr != nil {
-		if errors.Is(inspectErr, runtime.ErrContainerNotFound) {
-			if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), true); markErr != nil {
-				return runtime.ExecResult{}, markErr
-			}
-			return runtime.ExecResult{}, store.ErrNotFound
-		}
-		s.logger.Error("session inspect failed during exec recovery",
-			"session_id", session.ID,
-			"container_id", target,
-			"command", execOpts.Command,
-			"cwd", execOpts.Cwd,
-			"error", inspectErr,
-		)
-		return runtime.ExecResult{}, inspectErr
-	}
-	if info.State != runtime.ContainerRunning {
-		if _, err := s.runtime.Start(ctx, info.ID); err != nil {
-			s.logger.Error("session restart failed during exec recovery",
-				"session_id", session.ID,
-				"container_id", info.ID,
-				"command", execOpts.Command,
-				"cwd", execOpts.Cwd,
-				"error", err,
-			)
-			return runtime.ExecResult{}, err
-		}
-	}
-	if session.ContainerID != info.ID {
-		session.ContainerID = info.ID
-		if err := s.store.SaveSession(ctx, session); err != nil {
-			return runtime.ExecResult{}, err
-		}
-	}
-	result, err = s.runtime.Exec(ctx, info.ID, execOpts)
-	if err != nil {
-		s.logger.Error("session exec retry failed",
-			"session_id", session.ID,
-			"container_id", info.ID,
-			"command", execOpts.Command,
-			"cwd", execOpts.Cwd,
-			"error", err,
-		)
-		return runtime.ExecResult{}, err
-	}
-	return result, nil
+	return runtime.ExecResult{}, err
 }
 
 func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopSessionResponse, error) {
@@ -397,7 +338,7 @@ func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopS
 		)
 		return nil, err
 	}
-	if err := s.markSessionStopped(ctx, session, time.Now().UTC(), true); err != nil {
+	if err := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteWorkspaceOnStop); err != nil {
 		return nil, err
 	}
 
@@ -493,13 +434,7 @@ func (s *SessionService) ListExecutions(ctx context.Context, sessionID string, p
 }
 
 func (s *SessionService) Reconcile(ctx context.Context) error {
-	sessions, _, err := s.store.QuerySessions(ctx, store.SessionQuery{
-		Status: "active",
-		Pagination: store.Pagination{
-			Page:     1,
-			PageSize: 1000,
-		},
-	})
+	sessions, err := s.store.ListSessions(ctx)
 	if err != nil {
 		return err
 	}
@@ -507,12 +442,18 @@ func (s *SessionService) Reconcile(ctx context.Context) error {
 		info, err := s.inspectSession(ctx, session)
 		if err != nil {
 			if errors.Is(err, runtime.ErrContainerNotFound) {
-				if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), true); markErr != nil {
+				if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteWorkspaceOnStop); markErr != nil {
 					return markErr
 				}
 				continue
 			}
 			return err
+		}
+		if info.State != runtime.ContainerRunning {
+			if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteWorkspaceOnStop); markErr != nil {
+				return markErr
+			}
+			continue
 		}
 		if session.ContainerID != info.ID {
 			session.ContainerID = info.ID
@@ -537,8 +478,6 @@ func (s *SessionService) markSessionStopped(ctx context.Context, session *model.
 			workspaceErr = fmt.Errorf("delete workspace: %w", err)
 		}
 	}
-
-	s.scheduleLockCleanup(session.ID)
 	return workspaceErr
 }
 
@@ -555,50 +494,40 @@ func (s *SessionService) inspectSession(ctx context.Context, session *model.Sess
 
 func (s *SessionService) tryLock(id string) (func(), bool) {
 	s.lockMu.Lock()
-	lock, ok := s.locks[id]
-	if !ok {
-		lock = &sessionLock{}
-		s.locks[id] = lock
-	}
-	s.lockMu.Unlock()
-
-	if !lock.mu.TryLock() {
+	defer s.lockMu.Unlock()
+	if _, exists := s.locks[id]; exists {
 		return nil, false
 	}
+	s.locks[id] = struct{}{}
 	return func() {
-		s.releaseLock(id, lock)
+		s.releaseLock(id)
 	}, true
 }
 
-func (s *SessionService) releaseLock(id string, lock *sessionLock) {
-	lock.mu.Unlock()
-
+func (s *SessionService) releaseLock(id string) {
 	s.lockMu.Lock()
-	defer s.lockMu.Unlock()
-
-	current, ok := s.locks[id]
-	if !ok || current != lock || !lock.cleanupRequested {
-		return
-	}
-	if !lock.mu.TryLock() {
-		return
-	}
 	delete(s.locks, id)
-	lock.mu.Unlock()
+	s.lockMu.Unlock()
 }
 
-func (s *SessionService) scheduleLockCleanup(id string) {
-	s.lockMu.Lock()
-	defer s.lockMu.Unlock()
-
-	lock, ok := s.locks[id]
-	if !ok {
-		return
+func (s *SessionService) markSessionUnavailable(ctx context.Context, session *model.Session, stoppedAt time.Time) error {
+	info, err := s.inspectSession(ctx, session)
+	switch {
+	case err == nil:
+		if session.ContainerID != info.ID {
+			session.ContainerID = info.ID
+		}
+		if info.State == runtime.ContainerRunning {
+			return nil
+		}
+	case errors.Is(err, runtime.ErrContainerNotFound):
+	default:
+		s.logger.Error("session inspect failed during availability sync",
+			"session_id", session.ID,
+			"container_id", session.ContainerID,
+			"error", err,
+		)
+		return err
 	}
-	lock.cleanupRequested = true
-	if !lock.mu.TryLock() {
-		return
-	}
-	delete(s.locks, id)
-	lock.mu.Unlock()
+	return s.markSessionStopped(ctx, session, stoppedAt, s.cfg.DeleteWorkspaceOnStop)
 }

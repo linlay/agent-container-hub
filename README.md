@@ -113,12 +113,18 @@ make test
 - `BUILD_ROOT`
   - 默认值：`./data/builds`
   - environment build context 与 smoke check 临时目录根路径
+- `SESSION_MOUNT_TEMPLATE_ROOT`
+  - 默认值：空
+  - 可选的会话挂载模板目录；未配置时模板接口返回空模板
 - `ENGINE`
   - 默认值：自动探测
   - 可选值：`docker`、`podman`
 - `DEFAULT_COMMAND_TIMEOUT`
   - 默认值：`30s`
   - execute 请求未显式提供 `timeout_ms` 时的默认超时
+- `DELETE_WORKSPACE_ON_STOP`
+  - 默认值：`true`
+  - session 停止或被校正为 stopped 时是否删除 workspace
 - `ENABLE_EXEC_LOG_PERSIST`
   - 默认值：`false`
   - 是否持久化 execute 日志到 SQLite
@@ -147,11 +153,17 @@ WORKSPACE_ROOT=./data/workspaces
 # Root directory used for managed image builds and smoke-check temp files.
 BUILD_ROOT=./data/builds
 
+# Optional root directory that provides session mount templates for the UI/API.
+SESSION_MOUNT_TEMPLATE_ROOT=
+
 # Container engine: docker or podman. Leave empty for auto-detection.
 ENGINE=
 
 # Default timeout used when execute requests omit timeout_ms.
 DEFAULT_COMMAND_TIMEOUT=30s
+
+# Delete the session workspace when a session stops.
+DELETE_WORKSPACE_ON_STOP=true
 
 # Persist execute logs into SQLite.
 ENABLE_EXEC_LOG_PERSIST=false

@@ -330,8 +330,8 @@ func TestListEnvironmentsReturnsFilenameForInvalidYAML(t *testing.T) {
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("GET /api/environments status = %d, want 500", recorder.Code)
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte(filepath.Join("broken", "environment.yml"))) {
-		t.Fatalf("GET /api/environments body = %q, want filename", recorder.Body.String())
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"internal server error"`)) {
+		t.Fatalf("GET /api/environments body = %q, want internal server error", recorder.Body.String())
 	}
 }
 
@@ -522,8 +522,39 @@ func TestSessionCreateTemplateEndpoint(t *testing.T) {
 	if len(template.DefaultMounts) != 3 {
 		t.Fatalf("default mounts len = %d, want 3", len(template.DefaultMounts))
 	}
-	if len(template.ChatIDs) != 2 {
-		t.Fatalf("chat IDs len = %d, want 2", len(template.ChatIDs))
+}
+
+func TestExecuteEndpointReturnsConflictWhenContainerStopped(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	created := doJSON[api.CreateSessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+		SessionID:       "stopped-http-session",
+		EnvironmentName: "shell",
+	}, http.StatusOK, "")
+
+	info := fake.containers[created.ContainerID]
+	info.State = runtime.ContainerStopped
+	fake.containers[created.ContainerID] = info
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/stopped-http-session/execute", bytes.NewBufferString(`{"command":"pwd"}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("POST /api/sessions/{id}/execute status = %d, want 409", recorder.Code)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("recreate the session")) {
+		t.Fatalf("POST /api/sessions/{id}/execute body = %q, want recreate message", recorder.Body.String())
 	}
 }
 
@@ -644,10 +675,20 @@ func newTestHandler(t *testing.T, authToken string) http.Handler {
 }
 
 func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, config.Config) {
-	return newTestHandlerWithServerOptions(t, authToken, Options{})
+	handler, cfg, _ := newTestHandlerWithRuntimeAndOptions(t, authToken, Options{})
+	return handler, cfg
 }
 
 func newTestHandlerWithServerOptions(t *testing.T, authToken string, options Options) (http.Handler, config.Config) {
+	handler, cfg, _ := newTestHandlerWithRuntimeAndOptions(t, authToken, options)
+	return handler, cfg
+}
+
+func newTestHandlerWithRuntime(t *testing.T, authToken string) (http.Handler, config.Config, *httpFakeRuntime) {
+	return newTestHandlerWithRuntimeAndOptions(t, authToken, Options{})
+}
+
+func newTestHandlerWithRuntimeAndOptions(t *testing.T, authToken string, options Options) (http.Handler, config.Config, *httpFakeRuntime) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -660,10 +701,12 @@ func newTestHandlerWithServerOptions(t *testing.T, authToken string, options Opt
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
 		DefaultCommandTimeout:    time.Second,
+		DeleteWorkspaceOnStop:    true,
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,
 	}
-	return newHandlerForConfigWithOptions(t, cfg, options)
+	handler, returnedCfg, fake := newHandlerForConfigWithRuntimeAndOptions(t, cfg, options)
+	return handler, returnedCfg, fake
 }
 
 func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Handler {
@@ -679,6 +722,7 @@ func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Ha
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
 		DefaultCommandTimeout:    time.Second,
+		DeleteWorkspaceOnStop:    true,
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,
 	}
@@ -687,10 +731,16 @@ func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Ha
 }
 
 func newHandlerForConfig(t *testing.T, cfg config.Config) (http.Handler, config.Config) {
-	return newHandlerForConfigWithOptions(t, cfg, Options{})
+	handler, returnedCfg, _ := newHandlerForConfigWithRuntimeAndOptions(t, cfg, Options{})
+	return handler, returnedCfg
 }
 
 func newHandlerForConfigWithOptions(t *testing.T, cfg config.Config, options Options) (http.Handler, config.Config) {
+	handler, returnedCfg, _ := newHandlerForConfigWithRuntimeAndOptions(t, cfg, options)
+	return handler, returnedCfg
+}
+
+func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, options Options) (http.Handler, config.Config, *httpFakeRuntime) {
 	t.Helper()
 
 	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
@@ -699,7 +749,7 @@ func newHandlerForConfigWithOptions(t *testing.T, cfg config.Config, options Opt
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(builds) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "chats"), 0o755); err != nil {
+	if err := os.MkdirAll(cfg.SessionMountTemplateRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(session mount template root) error = %v", err)
 	}
 	st, err := store.Open(cfg.StateDBPath)
@@ -733,7 +783,7 @@ func newHandlerForConfigWithOptions(t *testing.T, cfg config.Config, options Opt
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return New(sessionService, environmentService, buildService, cfg.AuthToken, options), cfg
+	return New(sessionService, environmentService, buildService, cfg.AuthToken, options), cfg, fake
 }
 
 func repoRootFromPackageDir() (string, error) {
@@ -776,7 +826,14 @@ func (f *httpFakeRuntime) Start(_ context.Context, containerID string) (runtime.
 	return info, nil
 }
 
-func (f *httpFakeRuntime) Exec(_ context.Context, _ string, _ runtime.ExecOptions) (runtime.ExecResult, error) {
+func (f *httpFakeRuntime) Exec(_ context.Context, containerID string, _ runtime.ExecOptions) (runtime.ExecResult, error) {
+	info, ok := f.lookup(containerID)
+	if !ok {
+		return runtime.ExecResult{}, runtime.ErrContainerNotFound
+	}
+	if info.State != runtime.ContainerRunning {
+		return runtime.ExecResult{}, runtime.ErrContainerNotRunning
+	}
 	return f.execResult, nil
 }
 

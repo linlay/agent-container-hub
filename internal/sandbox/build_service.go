@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"agent-container-hub/internal/api"
@@ -24,6 +25,8 @@ type BuildService struct {
 	builder runtime.Builder
 	runtime runtime.Provider
 	logger  *slog.Logger
+	lockMu  sync.Mutex
+	locks   map[string]struct{}
 }
 
 func NewBuildService(cfg config.Config, st store.BuildJobStore, envs store.EnvironmentStore, builder runtime.Builder, provider runtime.Provider, logger *slog.Logger) *BuildService {
@@ -37,6 +40,7 @@ func NewBuildService(cfg config.Config, st store.BuildJobStore, envs store.Envir
 		builder: builder,
 		runtime: provider,
 		logger:  logger,
+		locks:   make(map[string]struct{}),
 	}
 }
 
@@ -52,6 +56,14 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 	if strings.TrimSpace(environment.Build.Dockerfile) == "" {
 		return nil, fmt.Errorf("%w: build.dockerfile is required", ErrValidation)
 	}
+	if err := util.ValidateEnvMap(environment.Build.BuildArgs, "build.build_args"); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
+	}
+	release, acquired := s.tryLock(environment.Name)
+	if !acquired {
+		return nil, fmt.Errorf("%w: build already in progress for environment %q", ErrConflict, environment.Name)
+	}
+	defer release()
 
 	jobID, err := generateID()
 	if err != nil {
@@ -123,6 +135,20 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 	}
 	s.logger.Info("environment built", "environment", environment.Name, "image", environment.ImageRef())
 	return buildJobToResponse(job), nil
+}
+
+func (s *BuildService) tryLock(name string) (func(), bool) {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	if _, exists := s.locks[name]; exists {
+		return nil, false
+	}
+	s.locks[name] = struct{}{}
+	return func() {
+		s.lockMu.Lock()
+		delete(s.locks, name)
+		s.lockMu.Unlock()
+	}, true
 }
 
 func (s *BuildService) runSmokeCheck(ctx context.Context, environment *model.Environment) error {

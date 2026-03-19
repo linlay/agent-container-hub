@@ -66,7 +66,6 @@ type SessionExecutionListResponse struct {
 type SessionCreateTemplateResponse struct {
 	MountTemplateRoot string        `json:"mount_template_root"`
 	DefaultMounts     []model.Mount `json:"default_mounts"`
-	ChatIDs           []string      `json:"chat_ids"`
 }
 
 type CreateSessionResponse struct {

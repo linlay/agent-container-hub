@@ -23,9 +23,6 @@ func Open(path string) (*SQLiteStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
-	if err := validateSQLitePath(path); err != nil {
-		return nil, err
-	}
 
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -39,20 +36,6 @@ func Open(path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	return store, nil
-}
-
-func validateSQLitePath(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat state db: %w", err)
-	}
-	if info.Size() == 0 {
-		return nil
-	}
-	return nil
 }
 
 func (s *SQLiteStore) init() error {
@@ -178,14 +161,26 @@ func (s *SQLiteStore) GetSession(_ context.Context, id string) (*model.Session, 
 }
 
 func (s *SQLiteStore) ListSessions(ctx context.Context) ([]*model.Session, error) {
-	items, _, err := s.QuerySessions(ctx, SessionQuery{
-		Status: "active",
-		Pagination: Pagination{
-			Page:     1,
-			PageSize: 1000,
-		},
-	})
-	return items, err
+	page := 1
+	items := make([]*model.Session, 0, 32)
+	for {
+		batch, total, err := s.QuerySessions(ctx, SessionQuery{
+			Status: "active",
+			Pagination: Pagination{
+				Page:     page,
+				PageSize: 100,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, batch...)
+		if len(batch) == 0 || len(items) >= total {
+			break
+		}
+		page++
+	}
+	return items, nil
 }
 
 func (s *SQLiteStore) QuerySessions(_ context.Context, query SessionQuery) ([]*model.Session, int, error) {

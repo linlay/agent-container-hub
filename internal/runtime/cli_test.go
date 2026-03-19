@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseContainerState(t *testing.T) {
@@ -16,48 +18,6 @@ func TestParseContainerState(t *testing.T) {
 	}
 	if got := parseContainerState("exited"); got != ContainerExited {
 		t.Fatalf("parseContainerState() = %s, want %s", got, ContainerExited)
-	}
-}
-
-func TestIsNotFound(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		output string
-		want   bool
-	}{
-		{
-			name:   "docker missing container",
-			output: "Error: No such container: demo",
-			want:   true,
-		},
-		{
-			name:   "podman missing object",
-			output: "Error: no such object: \"demo\"",
-			want:   true,
-		},
-		{
-			name:   "generic not found",
-			output: "resource not found",
-			want:   true,
-		},
-		{
-			name:   "other error",
-			output: "permission denied",
-			want:   false,
-		},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := isNotFound(tc.output); got != tc.want {
-				t.Fatalf("isNotFound(%q) = %v, want %v", tc.output, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -98,43 +58,6 @@ func TestIsAlreadyExists(t *testing.T) {
 
 			if got := isAlreadyExists(tc.output); got != tc.want {
 				t.Fatalf("isAlreadyExists(%q) = %v, want %v", tc.output, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestIsNotRunning(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		output string
-		want   bool
-	}{
-		{
-			name:   "docker not running",
-			output: "Error response from daemon: Container demo is not running",
-			want:   true,
-		},
-		{
-			name:   "podman state improper",
-			output: "Error: can only create exec sessions on running containers: container state improper",
-			want:   true,
-		},
-		{
-			name:   "other error",
-			output: "permission denied",
-			want:   false,
-		},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := isNotRunning(tc.output); got != tc.want {
-				t.Fatalf("isNotRunning(%q) = %v, want %v", tc.output, got, tc.want)
 			}
 		})
 	}
@@ -198,6 +121,61 @@ func TestCLIProviderStartDoesNotInspect(t *testing.T) {
 	if strings.Contains(logText, "inspect") {
 		t.Fatalf("Start() unexpectedly called inspect: %s", logText)
 	}
+	if !strings.Contains(logText, "ps -a --no-trunc") {
+		t.Fatalf("Start() log = %q, want ps lookup", logText)
+	}
+}
+
+func TestCLIProviderExecReturnsExitCodeForCommandFailure(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	t.Setenv("FAKE_RUNTIME_EXEC_EXIT", "7")
+	t.Setenv("FAKE_RUNTIME_EXEC_STDOUT", "partial")
+	t.Setenv("FAKE_RUNTIME_EXEC_STDERR", "warn")
+
+	result, err := provider.Exec(context.Background(), "demo", ExecOptions{
+		Command: "/bin/sh",
+		Args:    []string{"-lc", "exit 7"},
+		Cwd:     "/workspace",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if result.ExitCode != 7 {
+		t.Fatalf("Exec() exit code = %d, want 7", result.ExitCode)
+	}
+	if result.Stdout != "partial" || result.Stderr != "warn" {
+		t.Fatalf("Exec() output = (%q, %q), want (%q, %q)", result.Stdout, result.Stderr, "partial", "warn")
+	}
+}
+
+func TestCLIProviderExecReturnsNotRunningFromInspectState(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	t.Setenv("FAKE_RUNTIME_INSPECT_STATUS", "stopped")
+
+	_, err := provider.Exec(context.Background(), "demo", ExecOptions{
+		Command: "pwd",
+		Timeout: time.Second,
+	})
+	if !errors.Is(err, ErrContainerNotRunning) {
+		t.Fatalf("Exec() error = %v, want ErrContainerNotRunning", err)
+	}
+}
+
+func TestCLIProviderExecReturnsNotFoundWhenReferenceMissing(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	t.Setenv("FAKE_RUNTIME_PS_MODE", "empty")
+
+	_, err := provider.Exec(context.Background(), "missing", ExecOptions{
+		Command: "pwd",
+		Timeout: time.Second,
+	})
+	if !errors.Is(err, ErrContainerNotFound) {
+		t.Fatalf("Exec() error = %v, want ErrContainerNotFound", err)
+	}
 }
 
 func writeFakeRuntimeBinary(t *testing.T) (string, string) {
@@ -209,6 +187,16 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> \"" + logPath + "\"\n" +
 		"case \"$1\" in\n" +
+		"ps)\n" +
+		"  if [ \"$FAKE_RUNTIME_PS_MODE\" = 'empty' ]; then\n" +
+		"    exit 0\n" +
+		"  fi\n" +
+		"  if [ -n \"$FAKE_RUNTIME_PS_OUTPUT\" ]; then\n" +
+		"    printf '%s\\n' \"$FAKE_RUNTIME_PS_OUTPUT\"\n" +
+		"  else\n" +
+		"    printf 'ctr-demo\\tdemo\\n'\n" +
+		"  fi\n" +
+		"  ;;\n" +
 		"create)\n" +
 		"  echo ctr-demo\n" +
 		"  ;;\n" +
@@ -216,7 +204,16 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 		"  exit 0\n" +
 		"  ;;\n" +
 		"inspect)\n" +
-		"  echo '[]'\n" +
+		"  if [ \"$FAKE_RUNTIME_INSPECT_MODE\" = 'missing' ]; then\n" +
+		"    exit 1\n" +
+		"  fi\n" +
+		"  status=\"${FAKE_RUNTIME_INSPECT_STATUS:-running}\"\n" +
+		"  printf '[{\"Id\":\"ctr-demo\",\"Name\":\"/demo\",\"ImageName\":\"busybox:latest\",\"Config\":{\"Image\":\"busybox:latest\",\"Labels\":{}},\"State\":{\"Status\":\"%s\"},\"Created\":\"2026-03-17T12:38:34Z\"}]\\n' \"$status\"\n" +
+		"  ;;\n" +
+		"exec)\n" +
+		"  printf '%s' \"$FAKE_RUNTIME_EXEC_STDOUT\"\n" +
+		"  printf '%s' \"$FAKE_RUNTIME_EXEC_STDERR\" >&2\n" +
+		"  exit \"${FAKE_RUNTIME_EXEC_EXIT:-0}\"\n" +
 		"  ;;\n" +
 		"*)\n" +
 		"  exit 0\n" +

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +165,37 @@ func TestQuerySessionsAndExecutions(t *testing.T) {
 	}
 	if logs[0].Command != "echo" || !logs[0].StdoutTruncated {
 		t.Fatalf("stored execution = %+v, want persisted execution log", logs[0])
+	}
+}
+
+func TestListSessionsReturnsAllActivePages(t *testing.T) {
+	t.Parallel()
+
+	st, cleanup := newSQLiteStore(t)
+	defer cleanup()
+
+	now := time.Date(2026, time.March, 18, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 135; i++ {
+		session := &model.Session{
+			ID:              fmt.Sprintf("session-%03d", i),
+			EnvironmentName: "shell",
+			Image:           "busybox:latest",
+			DefaultCwd:      "/workspace",
+			WorkspacePath:   filepath.Join("/tmp", fmt.Sprintf("session-%03d", i)),
+			Status:          model.SessionStatusActive,
+			CreatedAt:       now.Add(time.Duration(i) * time.Second),
+		}
+		if err := st.SaveSession(context.Background(), session); err != nil {
+			t.Fatalf("SaveSession(%s) error = %v", session.ID, err)
+		}
+	}
+
+	items, err := st.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(items) != 135 {
+		t.Fatalf("ListSessions() len = %d, want 135", len(items))
 	}
 }
 

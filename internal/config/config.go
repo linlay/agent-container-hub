@@ -19,6 +19,7 @@ type Config struct {
 	SessionMountTemplateRoot string
 	Engine                   string
 	DefaultCommandTimeout    time.Duration
+	DeleteWorkspaceOnStop    bool
 	HTTPAccessLogEnabled     bool
 	HTTPErrorLogEnabled      bool
 	EnableExecLogPersist     bool
@@ -37,9 +38,10 @@ func Load() (Config, error) {
 		ConfigRoot:               getEnv("CONFIG_ROOT", filepath.Join(cwd, "configs")),
 		WorkspaceRoot:            getEnv("WORKSPACE_ROOT", filepath.Join(cwd, "data", "workspaces")),
 		BuildRoot:                getEnv("BUILD_ROOT", filepath.Join(cwd, "data", "builds")),
-		SessionMountTemplateRoot: getEnv("SESSION_MOUNT_TEMPLATE_ROOT", "/Users/linlay/Project/zenmind-env"),
-		Engine:                   firstNonEmpty(strings.TrimSpace(os.Getenv("ENGINE")), strings.TrimSpace(os.Getenv("RUNTIME"))),
+		SessionMountTemplateRoot: getEnv("SESSION_MOUNT_TEMPLATE_ROOT", ""),
+		Engine:                   strings.TrimSpace(os.Getenv("ENGINE")),
 		DefaultCommandTimeout:    getEnvDuration("DEFAULT_COMMAND_TIMEOUT", 30*time.Second),
+		DeleteWorkspaceOnStop:    getEnvBool("DELETE_WORKSPACE_ON_STOP", true),
 		HTTPAccessLogEnabled:     getEnvBool("HTTP_ACCESS_LOG_ENABLED", false),
 		HTTPErrorLogEnabled:      getEnvBool("HTTP_ERROR_LOG_ENABLED", false),
 		EnableExecLogPersist:     getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
@@ -132,19 +134,11 @@ func getEnvInt(key string, fallback int) int {
 	return parsed
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func absolutePath(path string) (string, error) {
-	path = filepath.Clean(strings.TrimSpace(path))
+	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", nil
 	}
+	path = filepath.Clean(path)
 	return filepath.Abs(path)
 }

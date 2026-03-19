@@ -278,7 +278,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := s.sessions.Create(r.Context(), req)
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -287,7 +287,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSessionCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	response, err := s.sessions.CreateTemplate(r.Context())
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -301,7 +301,7 @@ func (s *Server) handleExecuteSession(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := s.sessions.Execute(r.Context(), r.PathValue("id"), req)
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -310,7 +310,7 @@ func (s *Server) handleExecuteSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	response, err := s.sessions.Stop(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -319,7 +319,7 @@ func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	response, err := s.sessions.List(r.Context())
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -328,7 +328,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	response, err := s.sessions.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -345,7 +345,7 @@ func (s *Server) handleQuerySessions(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -357,7 +357,7 @@ func (s *Server) handleListSessionExecutions(w http.ResponseWriter, r *http.Requ
 		PageSize: parsePositiveInt(r.URL.Query().Get("page_size"), 20),
 	})
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -366,7 +366,7 @@ func (s *Server) handleListSessionExecutions(w http.ResponseWriter, r *http.Requ
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.List(r.Context())
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -375,7 +375,7 @@ func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleListEnvironmentFiles(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.ListFiles(r.Context(), r.PathValue("name"))
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -384,7 +384,7 @@ func (s *Server) handleListEnvironmentFiles(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleGetEnvironmentFile(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.GetFile(r.Context(), r.PathValue("name"), r.PathValue("path"))
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -398,7 +398,7 @@ func (s *Server) handlePutEnvironmentFile(w http.ResponseWriter, r *http.Request
 	}
 	response, err := s.environments.PutFile(r.Context(), r.PathValue("name"), r.PathValue("path"), req.Content)
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -407,7 +407,7 @@ func (s *Server) handlePutEnvironmentFile(w http.ResponseWriter, r *http.Request
 func (s *Server) handleGetEnvironment(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.Get(r.Context(), r.PathValue("name"))
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -424,7 +424,7 @@ func (s *Server) handleUpsertEnvironment(w http.ResponseWriter, r *http.Request)
 	}
 	response, err := s.environments.Upsert(r.Context(), req)
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -433,7 +433,7 @@ func (s *Server) handleUpsertEnvironment(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleBuildEnvironment(w http.ResponseWriter, r *http.Request) {
 	response, err := s.builds.BuildEnvironment(r.Context(), r.PathValue("name"))
 	if err != nil {
-		writeMappedError(w, err)
+		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -459,7 +459,7 @@ func (s *Server) isAuthorized(r *http.Request) bool {
 	return err == nil && cookie.Value == s.authToken
 }
 
-func writeMappedError(w http.ResponseWriter, err error) {
+func (s *Server) writeMappedError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, sandbox.ErrValidation):
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -468,7 +468,8 @@ func writeMappedError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, runtime.ErrContainerNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.logger.Error("internal api error", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
 }
 

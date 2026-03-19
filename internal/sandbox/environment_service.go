@@ -40,6 +40,12 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 	if strings.TrimSpace(req.ImageTag) == "" {
 		return nil, fmt.Errorf("%w: image_tag is required", ErrValidation)
 	}
+	if err := util.ValidateEnvMap(req.DefaultEnv, "default_env"); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
+	}
+	if err := util.ValidateEnvMap(req.Build.BuildArgs, "build.build_args"); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
+	}
 
 	environment := &model.Environment{
 		Name:            name,

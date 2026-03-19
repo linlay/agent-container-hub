@@ -87,6 +87,12 @@ func TestLoadUsesRenamedDefaultStateDBPath(t *testing.T) {
 	if want := filepath.Join(currentWD, "configs"); cfg.ConfigRoot != want {
 		t.Fatalf("ConfigRoot = %q, want %q", cfg.ConfigRoot, want)
 	}
+	if cfg.SessionMountTemplateRoot != "" {
+		t.Fatalf("SessionMountTemplateRoot = %q, want empty", cfg.SessionMountTemplateRoot)
+	}
+	if !cfg.DeleteWorkspaceOnStop {
+		t.Fatal("DeleteWorkspaceOnStop = false, want true")
+	}
 }
 
 func TestLoadParsesHTTPLogFlags(t *testing.T) {
@@ -102,5 +108,17 @@ func TestLoadParsesHTTPLogFlags(t *testing.T) {
 	}
 	if !cfg.HTTPErrorLogEnabled {
 		t.Fatal("HTTPErrorLogEnabled = false, want true")
+	}
+}
+
+func TestLoadParsesDeleteWorkspaceOnStop(t *testing.T) {
+	t.Setenv("DELETE_WORKSPACE_ON_STOP", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DeleteWorkspaceOnStop {
+		t.Fatal("DeleteWorkspaceOnStop = true, want false")
 	}
 }

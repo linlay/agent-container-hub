@@ -443,7 +443,7 @@ func TestCreateRejectsMissingMountSource(t *testing.T) {
 	}
 }
 
-func TestCreateTemplateListsMountDefaultsAndChats(t *testing.T) {
+func TestCreateTemplateListsMountDefaults(t *testing.T) {
 	t.Parallel()
 
 	services, cleanup, _ := newTestServices(t)
@@ -468,9 +468,6 @@ func TestCreateTemplateListsMountDefaultsAndChats(t *testing.T) {
 	if template.DefaultMounts[0].Destination != "/home" || template.DefaultMounts[1].Destination != "/pan" || template.DefaultMounts[2].Destination != "/skills" {
 		t.Fatalf("default mounts = %+v", template.DefaultMounts)
 	}
-	if len(template.ChatIDs) != 2 || template.ChatIDs[0] != "chat-a" || template.ChatIDs[1] != "chat-b" {
-		t.Fatalf("chat IDs = %+v", template.ChatIDs)
-	}
 }
 
 func TestExecuteReturnsNotFoundForMissingSession(t *testing.T) {
@@ -487,7 +484,7 @@ func TestExecuteReturnsNotFoundForMissingSession(t *testing.T) {
 	}
 }
 
-func TestExecuteStartsStoppedContainer(t *testing.T) {
+func TestExecuteFailsFastOnStoppedContainerAndMarksSessionStopped(t *testing.T) {
 	t.Parallel()
 
 	services, cleanup, fake := newTestServices(t)
@@ -519,13 +516,26 @@ func TestExecuteStartsStoppedContainer(t *testing.T) {
 	fake.containers[created.ContainerID] = info
 	fake.mu.Unlock()
 
-	if _, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
+	startCallsBeforeExecute := fake.startCalls
+	_, err = services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
 		Command: "pwd",
-	}); err != nil {
-		t.Fatalf("Execute() error = %v", err)
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Execute() error = %v, want ErrConflict", err)
 	}
-	if fake.startCalls == 0 {
-		t.Fatal("expected Start to be called")
+	if fake.startCalls != startCallsBeforeExecute {
+		t.Fatalf("startCalls = %d, want %d", fake.startCalls, startCallsBeforeExecute)
+	}
+
+	stored, err := services.sessions.Get(context.Background(), created.SessionID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if stored.Status != string(model.SessionStatusStopped) {
+		t.Fatalf("stored.Status = %q, want stopped", stored.Status)
+	}
+	if _, statErr := os.Stat(created.WorkspacePath); !os.IsNotExist(statErr) {
+		t.Fatalf("workspace stat error = %v, want not exist", statErr)
 	}
 }
 
@@ -1270,8 +1280,8 @@ func TestStopCleansUpSessionLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if len(services.sessions.locks) != 1 {
-		t.Fatalf("locks len after create = %d, want 1", len(services.sessions.locks))
+	if len(services.sessions.locks) != 0 {
+		t.Fatalf("locks len after create = %d, want 0", len(services.sessions.locks))
 	}
 
 	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
@@ -1328,7 +1338,7 @@ func TestReconcileCleansUpSessionLock(t *testing.T) {
 	}
 }
 
-func TestScheduleLockCleanupDoesNotDeleteHeldLock(t *testing.T) {
+func TestTryLockEnforcesExclusivityAndReleaseClearsEntry(t *testing.T) {
 	t.Parallel()
 
 	services, cleanup, _ := newTestServices(t)
@@ -1338,7 +1348,6 @@ func TestScheduleLockCleanupDoesNotDeleteHeldLock(t *testing.T) {
 	if !acquired {
 		t.Fatal("tryLock() acquired = false, want true")
 	}
-	services.sessions.scheduleLockCleanup("held-lock")
 
 	secondRelease, secondAcquired := services.sessions.tryLock("held-lock")
 	if secondAcquired {
@@ -1349,6 +1358,94 @@ func TestScheduleLockCleanupDoesNotDeleteHeldLock(t *testing.T) {
 	release()
 	if len(services.sessions.locks) != 0 {
 		t.Fatalf("locks len after release = %d, want 0", len(services.sessions.locks))
+	}
+}
+
+func TestStopRetainsWorkspaceWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServicesWithOptions(t, func(cfg *config.Config) {
+		cfg.DeleteWorkspaceOnStop = false
+	})
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "retain-workspace",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(created.WorkspacePath, "artifact.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(created.WorkspacePath, "artifact.txt")); err != nil {
+		t.Fatalf("Stat(artifact.txt) error = %v, want retained workspace", err)
+	}
+}
+
+func TestBuildEnvironmentRejectsConcurrentBuildsForSameEnvironment(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "python",
+		ImageRepository: "python",
+		ImageTag:        "3.11",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM python:3.11\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.buildStarted = make(chan struct{}, 1)
+	fake.buildContinue = make(chan struct{})
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := services.builds.BuildEnvironment(context.Background(), "python")
+		firstResult <- err
+	}()
+
+	select {
+	case <-fake.buildStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first build to start")
+	}
+
+	_, err := services.builds.BuildEnvironment(context.Background(), "python")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("BuildEnvironment() error = %v, want ErrConflict", err)
+	}
+
+	close(fake.buildContinue)
+	select {
+	case err := <-firstResult:
+		if err != nil {
+			t.Fatalf("first BuildEnvironment() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first build to finish")
 	}
 }
 
@@ -1382,6 +1479,7 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
 		DefaultCommandTimeout:    100 * time.Millisecond,
+		DeleteWorkspaceOnStop:    true,
 		ExecLogMaxOutputBytes:    65536,
 	}
 	if configure != nil {
@@ -1393,7 +1491,7 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(builds) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "chats"), 0o755); err != nil {
+	if err := os.MkdirAll(cfg.SessionMountTemplateRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(session mount template root) error = %v", err)
 	}
 	st, err := store.Open(cfg.StateDBPath)
@@ -1418,22 +1516,24 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 }
 
 type fakeRuntime struct {
-	mu          sync.Mutex
-	containers  map[string]runtime.ContainerInfo
-	createErr   error
-	execResult  runtime.ExecResult
-	execErr     error
-	startErr    error
-	stopErr     error
-	removeErr   error
-	inspectErr  error
-	lastCreate  runtime.CreateOptions
-	lastExec    runtime.ExecOptions
-	startCalls  int
-	lastBuild   runtime.BuildOptions
-	buildResult runtime.BuildResult
-	buildFiles  map[string]string
-	buildErr    error
+	mu            sync.Mutex
+	containers    map[string]runtime.ContainerInfo
+	createErr     error
+	execResult    runtime.ExecResult
+	execErr       error
+	startErr      error
+	stopErr       error
+	removeErr     error
+	inspectErr    error
+	lastCreate    runtime.CreateOptions
+	lastExec      runtime.ExecOptions
+	startCalls    int
+	lastBuild     runtime.BuildOptions
+	buildResult   runtime.BuildResult
+	buildFiles    map[string]string
+	buildErr      error
+	buildStarted  chan struct{}
+	buildContinue chan struct{}
 }
 
 func (f *fakeRuntime) Name() string { return "fake" }
@@ -1521,6 +1621,15 @@ func (f *fakeRuntime) Build(_ context.Context, opts runtime.BuildOptions) (runti
 	f.mu.Unlock()
 	if err != nil {
 		return runtime.BuildResult{}, err
+	}
+	if f.buildStarted != nil {
+		select {
+		case f.buildStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.buildContinue != nil {
+		<-f.buildContinue
 	}
 	if f.buildResult.StartedAt.IsZero() {
 		now := time.Now().UTC()

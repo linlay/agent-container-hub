@@ -143,26 +143,6 @@ func TestFileEnvironmentStoreUsesFileMTimeForTimestamps(t *testing.T) {
 	}
 }
 
-func TestFileEnvironmentStoreIgnoresLegacyFlatYAMLFiles(t *testing.T) {
-	t.Parallel()
-
-	store, root := newTestFileEnvironmentStore(t)
-	if err := os.WriteFile(filepath.Join(root, "legacy.yaml"), []byte("name: legacy\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	environments, err := store.ListEnvironments(context.Background())
-	if err != nil {
-		t.Fatalf("ListEnvironments() error = %v", err)
-	}
-	if len(environments) != 0 {
-		t.Fatalf("ListEnvironments() = %+v, want empty", environments)
-	}
-	if _, err := store.GetEnvironment(context.Background(), "legacy"); err != ErrNotFound {
-		t.Fatalf("GetEnvironment() error = %v, want ErrNotFound", err)
-	}
-}
-
 func TestFileEnvironmentStoreListReadAndWriteEnvironmentFiles(t *testing.T) {
 	t.Parallel()
 

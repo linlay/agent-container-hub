@@ -19,6 +19,12 @@ type CLIProvider struct {
 	binary string
 }
 
+type commandResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
 func NewAutoProvider(explicit string) (Provider, error) {
 	if explicit != "" {
 		if _, err := exec.LookPath(explicit); err != nil {
@@ -39,6 +45,9 @@ func (p *CLIProvider) Name() string {
 }
 
 func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (ContainerInfo, error) {
+	if err := util.ValidateEnvMap(opts.Env, "environment variable"); err != nil {
+		return ContainerInfo{}, err
+	}
 	args := []string{"create", "--name", opts.Name}
 	args = append(args, "--label", fmt.Sprintf("%s=agent-container-hub", ManagedByLabel))
 	for key, value := range opts.Labels {
@@ -67,11 +76,14 @@ func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (Container
 		args = append(args, "--mount", spec)
 	}
 	args = append(args, opts.Image, "/bin/sh", "-lc", "trap exit TERM INT; while :; do sleep 3600; done")
-	output, err := p.run(ctx, args...)
+	result, err := p.runCommand(ctx, args...)
 	if err != nil {
-		return ContainerInfo{}, err
+		if isAlreadyExists(result.stderr) {
+			return ContainerInfo{}, ErrContainerExists
+		}
+		return ContainerInfo{}, p.commandError(args, result, err)
 	}
-	containerID := strings.TrimSpace(output)
+	containerID := strings.TrimSpace(result.stdout)
 	return ContainerInfo{
 		ID:        containerID,
 		Name:      opts.Name,
@@ -83,16 +95,36 @@ func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (Container
 }
 
 func (p *CLIProvider) Start(ctx context.Context, containerID string) (ContainerInfo, error) {
-	if _, err := p.run(ctx, "start", containerID); err != nil {
+	resolvedID, err := p.resolveContainerReference(ctx, containerID)
+	if err != nil {
 		return ContainerInfo{}, err
 	}
+	result, err := p.runCommand(ctx, "start", resolvedID)
+	if err != nil {
+		return ContainerInfo{}, p.commandError([]string{"start", resolvedID}, result, err)
+	}
 	return ContainerInfo{
-		ID:    containerID,
+		ID:    resolvedID,
 		State: ContainerRunning,
 	}, nil
 }
 
 func (p *CLIProvider) Exec(ctx context.Context, containerID string, opts ExecOptions) (ExecResult, error) {
+	if err := util.ValidateEnvMap(map[string]string{"COMMAND": opts.Command}, "exec command"); err != nil {
+		return ExecResult{}, fmt.Errorf("invalid exec command: %w", err)
+	}
+	resolvedID, err := p.resolveContainerReference(ctx, containerID)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	info, err := p.Inspect(ctx, resolvedID)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	if info.State != ContainerRunning {
+		return ExecResult{}, ErrContainerNotRunning
+	}
+
 	startedAt := time.Now().UTC()
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -107,42 +139,41 @@ func (p *CLIProvider) Exec(ctx context.Context, containerID string, opts ExecOpt
 	}
 	args = append(args, containerID, opts.Command)
 	args = append(args, opts.Args...)
-
-	cmd := exec.CommandContext(execCtx, p.binary, args...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	args[len(args)-len(opts.Args)-2] = resolvedID
+	result, err := p.runCommand(execCtx, args...)
 	finishedAt := time.Now().UTC()
 
-	result := ExecResult{
+	execResult := ExecResult{
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
+		Stdout:     result.stdout,
+		Stderr:     result.stderr,
 	}
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
 
 	if execCtx.Err() == context.DeadlineExceeded {
-		result.TimedOut = true
-		result.ExitCode = 124
-		return result, nil
+		execResult.TimedOut = true
+		execResult.ExitCode = 124
+		return execResult, nil
 	}
 	if err == nil {
-		return result, nil
-	}
-	if isNotFound(stderr.String()) {
-		return ExecResult{}, ErrContainerNotFound
-	}
-	if isNotRunning(stderr.String()) {
-		return ExecResult{}, ErrContainerNotRunning
+		return execResult, nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		result.ExitCode = exitErr.ExitCode()
-		return result, nil
+		current, inspectErr := p.Inspect(ctx, resolvedID)
+		if inspectErr != nil {
+			if errors.Is(inspectErr, ErrContainerNotFound) {
+				return ExecResult{}, ErrContainerNotFound
+			}
+			return ExecResult{}, inspectErr
+		}
+		if current.State != ContainerRunning {
+			return ExecResult{}, ErrContainerNotRunning
+		}
+		execResult.ExitCode = result.exitCode
+		return execResult, nil
 	}
-	return ExecResult{}, fmt.Errorf("exec command failed: %w", err)
+	return ExecResult{}, p.commandError(args, result, err)
 }
 
 func (p *CLIProvider) Build(ctx context.Context, opts BuildOptions) (BuildResult, error) {
@@ -151,51 +182,66 @@ func (p *CLIProvider) Build(ctx context.Context, opts BuildOptions) (BuildResult
 	if strings.TrimSpace(opts.DockerfilePath) != "" {
 		args = append(args, "-f", opts.DockerfilePath)
 	}
+	if err := util.ValidateEnvMap(opts.BuildArgs, "build argument"); err != nil {
+		return BuildResult{}, err
+	}
 	for key, value := range opts.BuildArgs {
 		args = append(args, "--build-arg", fmt.Sprintf("%s=%s", key, value))
 	}
 	args = append(args, opts.ContextDir)
-
-	cmd := exec.CommandContext(ctx, p.binary, args...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	result, err := p.runCommand(ctx, args...)
 	finishedAt := time.Now().UTC()
 
-	result := BuildResult{
-		Output:     strings.TrimSpace(stdout.String() + stderr.String()),
+	buildResult := BuildResult{
+		Output:     strings.TrimSpace(result.stdout + result.stderr),
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
 	}
 	if err != nil {
-		return result, fmt.Errorf("%s %s: %w", p.binary, strings.Join(args, " "), err)
+		return buildResult, p.commandError(args, result, err)
 	}
-	return result, nil
+	return buildResult, nil
 }
 
 func (p *CLIProvider) Stop(ctx context.Context, containerID string, timeout time.Duration) error {
+	resolvedID, err := p.resolveContainerReference(ctx, containerID)
+	if err != nil {
+		return err
+	}
 	args := []string{"stop"}
 	if timeout > 0 {
 		args = append(args, "--time", strconv.Itoa(int(timeout.Seconds())))
 	}
-	args = append(args, containerID)
-	_, err := p.run(ctx, args...)
+	args = append(args, resolvedID)
+	result, err := p.runCommand(ctx, args...)
+	if err != nil {
+		return p.commandError(args, result, err)
+	}
 	return err
 }
 
 func (p *CLIProvider) Remove(ctx context.Context, containerID string) error {
-	_, err := p.run(ctx, "rm", "-f", containerID)
-	return err
+	resolvedID, err := p.resolveContainerReference(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	result, err := p.runCommand(ctx, "rm", "-f", resolvedID)
+	if err != nil {
+		return p.commandError([]string{"rm", "-f", resolvedID}, result, err)
+	}
+	return nil
 }
 
 func (p *CLIProvider) Inspect(ctx context.Context, containerID string) (ContainerInfo, error) {
-	output, err := p.run(ctx, "inspect", containerID)
+	resolvedID, err := p.resolveContainerReference(ctx, containerID)
 	if err != nil {
 		return ContainerInfo{}, err
 	}
-	infos, err := parseInspect(output)
+	result, err := p.runCommand(ctx, "inspect", resolvedID)
+	if err != nil {
+		return ContainerInfo{}, p.commandError([]string{"inspect", resolvedID}, result, err)
+	}
+	infos, err := parseInspect(result.stdout)
 	if err != nil {
 		return ContainerInfo{}, err
 	}
@@ -206,38 +252,81 @@ func (p *CLIProvider) Inspect(ctx context.Context, containerID string) (Containe
 }
 
 func (p *CLIProvider) ListByLabel(ctx context.Context, key, value string) ([]ContainerInfo, error) {
-	output, err := p.run(ctx, "ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}")
+	result, err := p.runCommand(ctx, "ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}")
 	if err != nil {
-		return nil, err
+		return nil, p.commandError([]string{"ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}"}, result, err)
 	}
-	ids := strings.Fields(strings.TrimSpace(output))
+	ids := strings.Fields(strings.TrimSpace(result.stdout))
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	args := append([]string{"inspect"}, ids...)
-	inspectOutput, err := p.run(ctx, args...)
+	inspectResult, err := p.runCommand(ctx, args...)
 	if err != nil {
-		return nil, err
+		return nil, p.commandError(args, inspectResult, err)
 	}
-	return parseInspect(inspectOutput)
+	return parseInspect(inspectResult.stdout)
 }
 
-func (p *CLIProvider) run(ctx context.Context, args ...string) (string, error) {
+func (p *CLIProvider) runCommand(ctx context.Context, args ...string) (commandResult, error) {
 	cmd := exec.CommandContext(ctx, p.binary, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if isNotFound(stderr.String()) {
-			return "", ErrContainerNotFound
-		}
-		if isAlreadyExists(stderr.String()) {
-			return "", ErrContainerExists
-		}
-		return "", fmt.Errorf("%s %s: %w: %s", p.binary, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	err := cmd.Run()
+	result := commandResult{
+		stdout: stdout.String(),
+		stderr: stderr.String(),
 	}
-	return stdout.String(), nil
+	if err == nil {
+		return result, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		result.exitCode = exitErr.ExitCode()
+		return result, err
+	}
+	result.exitCode = -1
+	return result, err
+}
+
+func (p *CLIProvider) commandError(args []string, result commandResult, err error) error {
+	detail := strings.TrimSpace(result.stderr)
+	if detail == "" {
+		detail = strings.TrimSpace(result.stdout)
+	}
+	if detail == "" {
+		return fmt.Errorf("%s %s: %w", p.binary, strings.Join(args, " "), err)
+	}
+	return fmt.Errorf("%s %s: %w: %s", p.binary, strings.Join(args, " "), err, detail)
+}
+
+func (p *CLIProvider) resolveContainerReference(ctx context.Context, ref string) (string, error) {
+	result, err := p.runCommand(ctx, "ps", "-a", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}")
+	if err != nil {
+		return "", p.commandError([]string{"ps", "-a", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}"}, result, err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(result.stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		id := strings.TrimSpace(parts[0])
+		if id == ref {
+			return id, nil
+		}
+		if len(parts) < 2 {
+			continue
+		}
+		for _, name := range strings.Split(parts[1], ",") {
+			if strings.TrimSpace(name) == ref {
+				return id, nil
+			}
+		}
+	}
+	return "", ErrContainerNotFound
 }
 
 type inspectResponse struct {
@@ -291,24 +380,10 @@ func parseContainerState(raw string) ContainerState {
 	}
 }
 
-func isNotFound(output string) bool {
-	lower := strings.ToLower(output)
-	return strings.Contains(lower, "no such container") ||
-		strings.Contains(lower, "no such object") ||
-		strings.Contains(lower, "not found")
-}
-
 func isAlreadyExists(output string) bool {
 	lower := strings.ToLower(output)
 	return strings.Contains(lower, "already in use") ||
 		strings.Contains(lower, "already exists")
-}
-
-func isNotRunning(output string) bool {
-	lower := strings.ToLower(output)
-	return strings.Contains(lower, "is not running") ||
-		strings.Contains(lower, "can only create exec sessions on running containers") ||
-		strings.Contains(lower, "container state improper")
 }
 
 func NormalizeMountSource(path string) string {
