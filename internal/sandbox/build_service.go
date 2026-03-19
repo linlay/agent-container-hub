@@ -93,6 +93,12 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 	}
 	if err != nil {
 		job.Error = err.Error()
+		s.logger.Error("environment build failed",
+			"environment", environment.Name,
+			"image", environment.ImageRef(),
+			"build_job_id", job.ID,
+			"error", err,
+		)
 		if saveErr := s.store.SaveBuildJob(ctx, job); saveErr != nil {
 			return nil, saveErr
 		}
@@ -102,6 +108,12 @@ func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.
 	if strings.TrimSpace(environment.Build.SmokeCommand) != "" {
 		if smokeErr := s.runSmokeCheck(ctx, environment); smokeErr != nil {
 			job.Error = smokeErr.Error()
+			s.logger.Error("environment smoke check failed",
+				"environment", environment.Name,
+				"image", environment.ImageRef(),
+				"build_job_id", job.ID,
+				"error", smokeErr,
+			)
 			if saveErr := s.store.SaveBuildJob(ctx, job); saveErr != nil {
 				return nil, saveErr
 			}

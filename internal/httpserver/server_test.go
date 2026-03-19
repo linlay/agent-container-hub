@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,6 +194,121 @@ func TestAuthProtectsAppAndAPI(t *testing.T) {
 	handler.ServeHTTP(authenticatedAssetRecorder, authenticatedAssetReq)
 	if authenticatedAssetRecorder.Code != http.StatusOK {
 		t.Fatalf("GET /ui/common.js status = %d, want 200", authenticatedAssetRecorder.Code)
+	}
+}
+
+func TestAPIAccessLoggingCapturesAPIRequestsOnly(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	handler, _ := newTestHandlerWithServerOptions(t, "", Options{
+		Logger:           slog.New(slog.NewJSONHandler(&logs, nil)),
+		AccessLogEnabled: true,
+	})
+
+	_ = doJSON[[]api.SessionResponse](t, handler, http.MethodGet, "/api/sessions", nil, http.StatusOK, "")
+	if !bytes.Contains(logs.Bytes(), []byte(`"msg":"api request"`)) {
+		t.Fatalf("logs = %s, want api request entry", logs.String())
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(`"path":"/api/sessions"`)) {
+		t.Fatalf("logs = %s, want /api/sessions path", logs.String())
+	}
+
+	logLen := logs.Len()
+	req := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /sessions status = %d, want 200", recorder.Code)
+	}
+	if logs.Len() != logLen {
+		t.Fatalf("non-api request unexpectedly logged: %s", logs.String()[logLen:])
+	}
+}
+
+func TestAPIErrorLoggingIncludesErrorMessages(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	handler, _ := newTestHandlerWithServerOptions(t, "secret", Options{
+		Logger:          slog.New(slog.NewJSONHandler(&logs, nil)),
+		ErrorLogEnabled: true,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/sessions status = %d, want 401", recorder.Code)
+	}
+
+	badJSONReq := httptest.NewRequest(http.MethodPost, "/api/sessions/create", bytes.NewBufferString(`{`))
+	badJSONReq.Header.Set("Authorization", "Bearer secret")
+	badJSONReq.Header.Set("Content-Type", "application/json")
+	badJSONRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(badJSONRecorder, badJSONReq)
+	if badJSONRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/sessions/create status = %d, want 400", badJSONRecorder.Code)
+	}
+
+	notFoundReq := httptest.NewRequest(http.MethodGet, "/api/does-not-exist", nil)
+	notFoundReq.Header.Set("Authorization", "Bearer secret")
+	notFoundRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(notFoundRecorder, notFoundReq)
+	if notFoundRecorder.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/does-not-exist status = %d, want 404", notFoundRecorder.Code)
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"api request failed"`,
+		`"error":"unauthorized"`,
+		`"error":"invalid JSON body"`,
+		`"error":"not found"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
+	}
+}
+
+func TestAPIPanicRecoveryLogsAndReturnsJSON(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	server := &Server{
+		logger:    slog.New(slog.NewJSONHandler(&logs, nil)),
+		errorLogs: true,
+	}
+	handler := server.wrapAPI(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/panic", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /api/panic status = %d, want 500", recorder.Code)
+	}
+
+	var payload map[string]string
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.Decode() error = %v", err)
+	}
+	if payload["error"] != "internal server error" {
+		t.Fatalf("panic payload = %+v, want internal server error", payload)
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"api panic recovered"`,
+		`"panic":"boom"`,
+		`"msg":"api request failed"`,
+		`"error":"internal server error"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
 	}
 }
 
@@ -526,6 +643,10 @@ func newTestHandler(t *testing.T, authToken string) http.Handler {
 }
 
 func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, config.Config) {
+	return newTestHandlerWithServerOptions(t, authToken, Options{})
+}
+
+func newTestHandlerWithServerOptions(t *testing.T, authToken string, options Options) (http.Handler, config.Config) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -541,7 +662,7 @@ func newTestHandlerWithConfig(t *testing.T, authToken string) (http.Handler, con
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,
 	}
-	return newHandlerForConfig(t, cfg)
+	return newHandlerForConfigWithOptions(t, cfg, options)
 }
 
 func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Handler {
@@ -565,6 +686,10 @@ func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Ha
 }
 
 func newHandlerForConfig(t *testing.T, cfg config.Config) (http.Handler, config.Config) {
+	return newHandlerForConfigWithOptions(t, cfg, Options{})
+}
+
+func newHandlerForConfigWithOptions(t *testing.T, cfg config.Config, options Options) (http.Handler, config.Config) {
 	t.Helper()
 
 	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
@@ -600,10 +725,14 @@ func newHandlerForConfig(t *testing.T, cfg config.Config) (http.Handler, config.
 			FinishedAt: time.Now().UTC(),
 		},
 	}
-	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	environmentService := sandbox.NewEnvironmentService(envs, st, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	buildService := sandbox.NewBuildService(cfg, st, envs, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	return New(sessionService, environmentService, buildService, cfg.AuthToken), cfg
+	serviceLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, serviceLogger)
+	environmentService := sandbox.NewEnvironmentService(envs, st, serviceLogger)
+	buildService := sandbox.NewBuildService(cfg, st, envs, fake, fake, serviceLogger)
+	if options.Logger == nil {
+		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return New(sessionService, environmentService, buildService, cfg.AuthToken, options), cfg
 }
 
 func repoRootFromPackageDir() (string, error) {

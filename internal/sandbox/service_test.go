@@ -1,8 +1,10 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -406,6 +408,41 @@ func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsMissingMountSource(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	missingSource := filepath.Join(t.TempDir(), "missing-home")
+	_, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "missing-mount",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      missingSource,
+			Destination: "/home",
+		}},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "mount source does not exist") {
+		t.Fatalf("Create() error = %v, want missing mount source message", err)
+	}
+}
+
 func TestCreateTemplateListsMountDefaultsAndChats(t *testing.T) {
 	t.Parallel()
 
@@ -562,6 +599,82 @@ func TestBuildEnvironmentPreservesFailedBuild(t *testing.T) {
 	}
 	if job.Status != buildStatusFailed || job.Error == "" {
 		t.Fatalf("BuildEnvironment() = %+v, want failed job with error", job)
+	}
+}
+
+func TestBuildEnvironmentLogsBuilderFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	services, cleanup, fake := newTestServicesWithLogger(t, nil, logger)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "broken",
+		ImageRepository: "broken",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.buildErr = errors.New("build failed")
+	if _, err := services.builds.BuildEnvironment(context.Background(), "broken"); err != nil {
+		t.Fatalf("BuildEnvironment() error = %v", err)
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"environment build failed"`,
+		`"environment":"broken"`,
+		`"error":"build failed"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
+	}
+}
+
+func TestBuildEnvironmentLogsSmokeFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	services, cleanup, fake := newTestServicesWithLogger(t, nil, logger)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "python",
+		ImageRepository: "python",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile:   "FROM busybox:latest\n",
+			SmokeCommand: "/bin/sh",
+			SmokeArgs:    []string{"-lc", "exit 9"},
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.execResult = runtime.ExecResult{ExitCode: 9, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}
+	if _, err := services.builds.BuildEnvironment(context.Background(), "python"); err != nil {
+		t.Fatalf("BuildEnvironment() error = %v", err)
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"environment smoke check failed"`,
+		`"environment":"python"`,
+		`"error":"smoke check failed with exit code 9"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
 	}
 }
 
@@ -960,6 +1073,178 @@ func TestExecuteLogPersistenceDisabledSkipsStorage(t *testing.T) {
 	}
 }
 
+func TestCreateLogsRuntimeCreateFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	services, cleanup, fake := newTestServicesWithLogger(t, nil, logger)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.createErr = errors.New("docker create failed")
+	if _, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "create-fail",
+		EnvironmentName: "shell",
+	}); err == nil {
+		t.Fatal("Create() error = nil, want runtime failure")
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"session create runtime failed"`,
+		`"session_id":"create-fail"`,
+		`"error":"docker create failed"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
+	}
+}
+
+func TestCreateLogsRuntimeStartFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	services, cleanup, fake := newTestServicesWithLogger(t, nil, logger)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.startErr = errors.New("docker start failed")
+	if _, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "start-fail",
+		EnvironmentName: "shell",
+	}); err == nil {
+		t.Fatal("Create() error = nil, want start failure")
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"session start failed"`,
+		`"session_id":"start-fail"`,
+		`"error":"docker start failed"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
+	}
+}
+
+func TestExecuteLogsRuntimeFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	services, cleanup, fake := newTestServicesWithLogger(t, nil, logger)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "exec-fail",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	fake.execErr = errors.New("docker exec failed")
+	if _, err := services.sessions.Execute(context.Background(), created.SessionID, api.ExecuteSessionRequest{
+		Command: "pwd",
+	}); err == nil {
+		t.Fatal("Execute() error = nil, want runtime failure")
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"session exec failed"`,
+		`"session_id":"exec-fail"`,
+		`"error":"docker exec failed"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
+	}
+}
+
+func TestStopLogsRuntimeFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	services, cleanup, fake := newTestServicesWithLogger(t, nil, logger)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "stop-fail",
+		EnvironmentName: "shell",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	fake.stopErr = errors.New("docker stop failed")
+	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err == nil {
+		t.Fatal("Stop() error = nil, want runtime failure")
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"session stop failed"`,
+		`"session_id":"stop-fail"`,
+		`"error":"docker stop failed"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %s, want %s", logText, want)
+		}
+	}
+}
+
 type testServices struct {
 	store        store.RuntimeStore
 	envs         store.EnvironmentStore
@@ -975,6 +1260,10 @@ func newTestServices(t *testing.T) (*testServices, func(), *fakeRuntime) {
 }
 
 func newTestServicesWithOptions(t *testing.T, configure func(*config.Config)) (*testServices, func(), *fakeRuntime) {
+	return newTestServicesWithLogger(t, configure, nil)
+}
+
+func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), logger *slog.Logger) (*testServices, func(), *fakeRuntime) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -1009,19 +1298,28 @@ func newTestServicesWithOptions(t *testing.T, configure func(*config.Config)) (*
 		t.Fatalf("store.OpenFileEnvironmentStore() error = %v", err)
 	}
 	fake := &fakeRuntime{containers: make(map[string]runtime.ContainerInfo)}
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	return &testServices{
 		store:        st,
 		envs:         envs,
-		sessions:     NewSessionService(cfg, st, envs, fake, slog.New(slog.NewTextHandler(os.Stdout, nil))),
-		environments: NewEnvironmentService(envs, st, slog.New(slog.NewTextHandler(os.Stdout, nil))),
-		builds:       NewBuildService(cfg, st, envs, fake, fake, slog.New(slog.NewTextHandler(os.Stdout, nil))),
+		sessions:     NewSessionService(cfg, st, envs, fake, logger),
+		environments: NewEnvironmentService(envs, st, logger),
+		builds:       NewBuildService(cfg, st, envs, fake, fake, logger),
 	}, func() { _ = st.Close() }, fake
 }
 
 type fakeRuntime struct {
 	mu          sync.Mutex
 	containers  map[string]runtime.ContainerInfo
+	createErr   error
 	execResult  runtime.ExecResult
+	execErr     error
+	startErr    error
+	stopErr     error
+	removeErr   error
+	inspectErr  error
 	lastCreate  runtime.CreateOptions
 	lastExec    runtime.ExecOptions
 	startCalls  int
@@ -1037,6 +1335,9 @@ func (f *fakeRuntime) Create(_ context.Context, opts runtime.CreateOptions) (run
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastCreate = opts
+	if f.createErr != nil {
+		return runtime.ContainerInfo{}, f.createErr
+	}
 	id := "ctr-" + opts.Name
 	info := runtime.ContainerInfo{
 		ID:        id,
@@ -1053,6 +1354,9 @@ func (f *fakeRuntime) Create(_ context.Context, opts runtime.CreateOptions) (run
 func (f *fakeRuntime) Start(_ context.Context, containerID string) (runtime.ContainerInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.startErr != nil {
+		return runtime.ContainerInfo{}, f.startErr
+	}
 	info, ok := f.lookup(containerID)
 	if !ok {
 		return runtime.ContainerInfo{}, runtime.ErrContainerNotFound
@@ -1066,6 +1370,10 @@ func (f *fakeRuntime) Start(_ context.Context, containerID string) (runtime.Cont
 func (f *fakeRuntime) Exec(_ context.Context, containerID string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastExec = opts
+	if f.execErr != nil {
+		return runtime.ExecResult{}, f.execErr
+	}
 	info, ok := f.lookup(containerID)
 	if !ok {
 		return runtime.ExecResult{}, runtime.ErrContainerNotFound
@@ -1073,7 +1381,6 @@ func (f *fakeRuntime) Exec(_ context.Context, containerID string, opts runtime.E
 	if info.State != runtime.ContainerRunning {
 		return runtime.ExecResult{}, runtime.ErrContainerNotRunning
 	}
-	f.lastExec = opts
 	if f.execResult.StartedAt.IsZero() {
 		now := time.Now().UTC()
 		f.execResult.StartedAt = now
@@ -1119,6 +1426,9 @@ func (f *fakeRuntime) Build(_ context.Context, opts runtime.BuildOptions) (runti
 func (f *fakeRuntime) Stop(_ context.Context, containerID string, _ time.Duration) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	info, ok := f.lookup(containerID)
 	if !ok {
 		return runtime.ErrContainerNotFound
@@ -1131,6 +1441,9 @@ func (f *fakeRuntime) Stop(_ context.Context, containerID string, _ time.Duratio
 func (f *fakeRuntime) Remove(_ context.Context, containerID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.removeErr != nil {
+		return f.removeErr
+	}
 	info, ok := f.lookup(containerID)
 	if ok {
 		delete(f.containers, info.ID)
@@ -1141,6 +1454,9 @@ func (f *fakeRuntime) Remove(_ context.Context, containerID string) error {
 func (f *fakeRuntime) Inspect(_ context.Context, containerID string) (runtime.ContainerInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inspectErr != nil {
+		return runtime.ContainerInfo{}, f.inspectErr
+	}
 	info, ok := f.lookup(containerID)
 	if !ok {
 		return runtime.ContainerInfo{}, runtime.ErrContainerNotFound

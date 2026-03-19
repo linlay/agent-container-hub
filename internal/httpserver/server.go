@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/runtime"
@@ -51,12 +54,25 @@ type Server struct {
 	builds       BuildService
 	authToken    string
 	uiFS         fs.FS
+	logger       *slog.Logger
+	accessLogs   bool
+	errorLogs    bool
 }
 
-func New(sessions SessionService, environments EnvironmentService, builds BuildService, authToken string) http.Handler {
+type Options struct {
+	Logger           *slog.Logger
+	AccessLogEnabled bool
+	ErrorLogEnabled  bool
+}
+
+func New(sessions SessionService, environments EnvironmentService, builds BuildService, authToken string, options Options) http.Handler {
 	uiFS, err := fs.Sub(uiFiles, "ui")
 	if err != nil {
 		panic(err)
+	}
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 	server := &Server{
 		sessions:     sessions,
@@ -64,11 +80,15 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 		builds:       builds,
 		authToken:    strings.TrimSpace(authToken),
 		uiFS:         uiFS,
+		logger:       logger,
+		accessLogs:   options.AccessLogEnabled,
+		errorLogs:    options.ErrorLogEnabled,
 	}
 	mux := http.NewServeMux()
+	apiMux := http.NewServeMux()
 
-	mux.HandleFunc("POST /api/auth/login", server.handleLogin)
-	mux.HandleFunc("POST /api/auth/logout", server.handleLogout)
+	apiMux.Handle("POST /api/auth/login", http.HandlerFunc(server.handleLogin))
+	apiMux.Handle("POST /api/auth/logout", http.HandlerFunc(server.handleLogout))
 
 	mux.Handle("GET /", server.requireAuth(http.HandlerFunc(server.handleSessionsPage)))
 	mux.Handle("GET /app", server.requireAuth(http.HandlerFunc(server.handleSessionsPage)))
@@ -77,24 +97,112 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	mux.Handle("GET /ui/", server.requireAuth(http.StripPrefix("/ui/", http.FileServer(http.FS(server.uiFS)))))
 	mux.HandleFunc("GET /login", server.handleLoginPage)
 
-	mux.Handle("POST /api/sessions/create", server.requireAuth(http.HandlerFunc(server.handleCreateSession)))
-	mux.Handle("GET /api/session-create/template", server.requireAuth(http.HandlerFunc(server.handleGetSessionCreateTemplate)))
-	mux.Handle("GET /api/sessions", server.requireAuth(http.HandlerFunc(server.handleListSessions)))
-	mux.Handle("GET /api/sessions/query", server.requireAuth(http.HandlerFunc(server.handleQuerySessions)))
-	mux.Handle("GET /api/sessions/{id}", server.requireAuth(http.HandlerFunc(server.handleGetSession)))
-	mux.Handle("POST /api/sessions/{id}/execute", server.requireAuth(http.HandlerFunc(server.handleExecuteSession)))
-	mux.Handle("GET /api/sessions/{id}/executions", server.requireAuth(http.HandlerFunc(server.handleListSessionExecutions)))
-	mux.Handle("POST /api/sessions/{id}/stop", server.requireAuth(http.HandlerFunc(server.handleStopSession)))
-	mux.Handle("GET /api/environments", server.requireAuth(http.HandlerFunc(server.handleListEnvironments)))
-	mux.Handle("POST /api/environments", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
-	mux.Handle("GET /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironment)))
-	mux.Handle("PUT /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
-	mux.Handle("GET /api/environments/{name}/files", server.requireAuth(http.HandlerFunc(server.handleListEnvironmentFiles)))
-	mux.Handle("GET /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironmentFile)))
-	mux.Handle("PUT /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handlePutEnvironmentFile)))
-	mux.Handle("POST /api/environments/{name}/build", server.requireAuth(http.HandlerFunc(server.handleBuildEnvironment)))
+	apiMux.Handle("POST /api/sessions/create", server.requireAuth(http.HandlerFunc(server.handleCreateSession)))
+	apiMux.Handle("GET /api/session-create/template", server.requireAuth(http.HandlerFunc(server.handleGetSessionCreateTemplate)))
+	apiMux.Handle("GET /api/sessions", server.requireAuth(http.HandlerFunc(server.handleListSessions)))
+	apiMux.Handle("GET /api/sessions/query", server.requireAuth(http.HandlerFunc(server.handleQuerySessions)))
+	apiMux.Handle("GET /api/sessions/{id}", server.requireAuth(http.HandlerFunc(server.handleGetSession)))
+	apiMux.Handle("POST /api/sessions/{id}/execute", server.requireAuth(http.HandlerFunc(server.handleExecuteSession)))
+	apiMux.Handle("GET /api/sessions/{id}/executions", server.requireAuth(http.HandlerFunc(server.handleListSessionExecutions)))
+	apiMux.Handle("POST /api/sessions/{id}/stop", server.requireAuth(http.HandlerFunc(server.handleStopSession)))
+	apiMux.Handle("GET /api/environments", server.requireAuth(http.HandlerFunc(server.handleListEnvironments)))
+	apiMux.Handle("POST /api/environments", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
+	apiMux.Handle("GET /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironment)))
+	apiMux.Handle("PUT /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
+	apiMux.Handle("GET /api/environments/{name}/files", server.requireAuth(http.HandlerFunc(server.handleListEnvironmentFiles)))
+	apiMux.Handle("GET /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironmentFile)))
+	apiMux.Handle("PUT /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handlePutEnvironmentFile)))
+	apiMux.Handle("POST /api/environments/{name}/build", server.requireAuth(http.HandlerFunc(server.handleBuildEnvironment)))
+	apiMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "not found")
+	})
+	apiHandler := server.wrapAPI(apiMux)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+		mux.Handle(method+" /api/", apiHandler)
+	}
 
 	return mux
+}
+
+type apiResponseWriter struct {
+	http.ResponseWriter
+	status       int
+	errorMessage string
+}
+
+func (w *apiResponseWriter) Header() http.Header {
+	return w.ResponseWriter.Header()
+}
+
+func (w *apiResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *apiResponseWriter) Write(payload []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(payload)
+}
+
+func (w *apiResponseWriter) Status() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+func (w *apiResponseWriter) setErrorMessage(message string) {
+	w.errorMessage = message
+}
+
+func (s *Server) wrapAPI(next http.Handler) http.Handler {
+	return s.observeAPI(s.recoverAPI(next))
+}
+
+func (s *Server) observeAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		tracker := &apiResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(tracker, r)
+
+		durationMS := time.Since(startedAt).Milliseconds()
+		logArgs := []any{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"query", r.URL.RawQuery,
+			"status", tracker.Status(),
+			"duration_ms", durationMS,
+			"remote_addr", r.RemoteAddr,
+		}
+		if s.accessLogs {
+			s.logger.Info("api request", logArgs...)
+		}
+		if s.errorLogs && tracker.Status() >= http.StatusBadRequest {
+			logArgs = append(logArgs, "error", tracker.errorMessage)
+			s.logger.Error("api request failed", logArgs...)
+		}
+	})
+}
+
+func (s *Server) recoverAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.logger.Error("api panic recovered",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"query", r.URL.RawQuery,
+					"remote_addr", r.RemoteAddr,
+					"panic", fmt.Sprint(recovered),
+					"stack", string(debug.Stack()),
+				)
+				writeError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
@@ -365,6 +473,9 @@ func writeMappedError(w http.ResponseWriter, err error) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	if tracker, ok := w.(interface{ setErrorMessage(string) }); ok {
+		tracker.setErrorMessage(message)
+	}
 	writeJSON(w, status, map[string]string{"error": message})
 }
 

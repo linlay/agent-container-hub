@@ -88,3 +88,19 @@ func TestLoadUsesRenamedDefaultStateDBPath(t *testing.T) {
 		t.Fatalf("ConfigRoot = %q, want %q", cfg.ConfigRoot, want)
 	}
 }
+
+func TestLoadParsesHTTPLogFlags(t *testing.T) {
+	t.Setenv("HTTP_ACCESS_LOG_ENABLED", "true")
+	t.Setenv("HTTP_ERROR_LOG_ENABLED", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.HTTPAccessLogEnabled {
+		t.Fatal("HTTPAccessLogEnabled = false, want true")
+	}
+	if !cfg.HTTPErrorLogEnabled {
+		t.Fatal("HTTPErrorLogEnabled = false, want true")
+	}
+}

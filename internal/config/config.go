@@ -19,6 +19,8 @@ type Config struct {
 	SessionMountTemplateRoot string
 	Engine                   string
 	DefaultCommandTimeout    time.Duration
+	HTTPAccessLogEnabled     bool
+	HTTPErrorLogEnabled      bool
 	EnableExecLogPersist     bool
 	ExecLogMaxOutputBytes    int
 }
@@ -38,6 +40,8 @@ func Load() (Config, error) {
 		SessionMountTemplateRoot: getEnv("SESSION_MOUNT_TEMPLATE_ROOT", "/Users/linlay/Project/zenmind-env"),
 		Engine:                   firstNonEmpty(strings.TrimSpace(os.Getenv("ENGINE")), strings.TrimSpace(os.Getenv("RUNTIME"))),
 		DefaultCommandTimeout:    getEnvDuration("DEFAULT_COMMAND_TIMEOUT", 30*time.Second),
+		HTTPAccessLogEnabled:     getEnvBool("HTTP_ACCESS_LOG_ENABLED", false),
+		HTTPErrorLogEnabled:      getEnvBool("HTTP_ERROR_LOG_ENABLED", false),
 		EnableExecLogPersist:     getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
 		ExecLogMaxOutputBytes:    getEnvInt("EXEC_LOG_MAX_OUTPUT_BYTES", 65536),
 	}
