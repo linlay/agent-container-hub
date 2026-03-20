@@ -49,6 +49,12 @@ func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
 	if createResp.SessionID != "http-session" {
 		t.Fatalf("createResp.SessionID = %q, want http-session", createResp.SessionID)
 	}
+	if createResp.DefaultCwd != runtime.DefaultMountPath {
+		t.Fatalf("createResp.DefaultCwd = %q, want %q", createResp.DefaultCwd, runtime.DefaultMountPath)
+	}
+	if len(createResp.Mounts) != 1 || createResp.Mounts[0].Destination != runtime.DefaultMountPath {
+		t.Fatalf("createResp.Mounts = %+v, want auto rootfs mount at %s", createResp.Mounts, runtime.DefaultMountPath)
+	}
 	if createResp.DurationMS < 0 {
 		t.Fatalf("createResp.DurationMS = %d, want non-negative", createResp.DurationMS)
 	}
@@ -509,7 +515,7 @@ func TestSessionCreateTemplateEndpoint(t *testing.T) {
 	t.Parallel()
 
 	handler, cfg := newTestHandlerWithConfig(t, "")
-	for _, dir := range []string{"home", "pan", "skills", filepath.Join("chats", "chat-1"), filepath.Join("chats", "chat-2")} {
+	for _, dir := range []string{"home", "pan", "skills", "_session_", filepath.Join("chats", "chat-1"), filepath.Join("chats", "chat-2")} {
 		if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -589,6 +595,46 @@ func TestCreateSessionEndpointAcceptsMounts(t *testing.T) {
 	}
 	if created.Mounts[0].Destination != "/home" {
 		t.Fatalf("created mount = %+v, want /home first", created.Mounts[0])
+	}
+	if created.Mounts[1].Destination != runtime.DefaultMountPath {
+		t.Fatalf("created mount = %+v, want rootfs mount at %s", created.Mounts[1], runtime.DefaultMountPath)
+	}
+}
+
+func TestCreateSessionEndpointAcceptsRootMount(t *testing.T) {
+	t.Parallel()
+
+	handler, cfg := newTestHandlerWithConfig(t, "")
+	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "root"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	created := doJSON[api.CreateSessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+		SessionID:       "with-root-mount",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      filepath.Join(cfg.SessionMountTemplateRoot, "root"),
+			Destination: "/root",
+		}},
+	}, http.StatusOK, "")
+	if len(created.Mounts) != 2 {
+		t.Fatalf("created mounts len = %d, want 2", len(created.Mounts))
+	}
+	if created.Mounts[0].Destination != "/root" {
+		t.Fatalf("created mount = %+v, want /root first", created.Mounts[0])
+	}
+	if created.Mounts[1].Destination != runtime.DefaultMountPath {
+		t.Fatalf("created mount = %+v, want rootfs mount at %s", created.Mounts[1], runtime.DefaultMountPath)
 	}
 }
 

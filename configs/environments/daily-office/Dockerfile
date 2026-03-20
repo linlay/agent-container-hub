@@ -184,6 +184,6 @@ RUN set -euo pipefail; \
     install -m 0755 "${bin_path}" /usr/local/bin/himalaya; \
     rm -rf "${tmpdir}"
 
-RUN mkdir -p /root /skills
+RUN mkdir -p /_session_ /skills
 
-WORKDIR /root
+WORKDIR /_session_

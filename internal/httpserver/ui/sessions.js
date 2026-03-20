@@ -11,6 +11,7 @@ import {
 } from "/ui/common.js";
 
 const DEFAULT_SESSION_STATUS_FILTER = "history";
+const RESERVED_SESSION_MOUNT_PATH = "/_session_";
 
 const state = {
   sessions: {
@@ -482,7 +483,7 @@ function renderSessionDetail() {
   }
 
   const mounts = (item.mounts || []).map((mount) => {
-    const kind = mount.destination === "/root" && mount.source === item.rootfs_path
+    const kind = mount.destination === RESERVED_SESSION_MOUNT_PATH && mount.source === item.rootfs_path
       ? "rootfs mount"
       : "snapshot mount";
     return `

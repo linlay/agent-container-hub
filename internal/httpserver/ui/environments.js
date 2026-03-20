@@ -31,7 +31,7 @@ function clearEnvironmentForm() {
   document.getElementById("name").value = "";
   document.getElementById("repository").value = "";
   document.getElementById("tag").value = "";
-  document.getElementById("cwd").value = "/root";
+  document.getElementById("cwd").value = "/_session_";
   document.getElementById("description").value = "";
   document.getElementById("default-execute-command").value = "";
   document.getElementById("default-execute-cwd").value = "";
@@ -208,7 +208,7 @@ async function selectEnvironment(name) {
   document.getElementById("name").value = item.name || "";
   document.getElementById("repository").value = item.image_repository || "";
   document.getElementById("tag").value = item.image_tag || "";
-  document.getElementById("cwd").value = item.default_cwd || "/root";
+  document.getElementById("cwd").value = item.default_cwd || "/_session_";
   document.getElementById("description").value = item.description || "";
   state.environments.selectedBuild = normalizeBuild(item.build);
   state.environments.selectedDetails = normalizeEnvironmentDetails(item);

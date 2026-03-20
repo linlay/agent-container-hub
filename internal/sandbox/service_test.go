@@ -112,7 +112,7 @@ func TestSessionExecuteCanReuseSameRunningSession(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/root",
+		DefaultCwd:      runtime.DefaultMountPath,
 		Enabled:         true,
 		Build: model.BuildSpec{
 			Dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]\n",
@@ -285,7 +285,7 @@ func TestCreateMergesEnvironmentAndSessionMounts(t *testing.T) {
 	if fake.lastCreate.Mounts[1].Destination != "/home" || fake.lastCreate.Mounts[1].ReadOnly {
 		t.Fatalf("session mount = %+v", fake.lastCreate.Mounts[1])
 	}
-	if fake.lastCreate.Mounts[2].Destination != "/root" {
+	if fake.lastCreate.Mounts[2].Destination != runtime.DefaultMountPath {
 		t.Fatalf("rootfs mount = %+v", fake.lastCreate.Mounts[2])
 	}
 }
@@ -372,6 +372,51 @@ func TestCreateRejectsDuplicateMountDestinations(t *testing.T) {
 	}
 }
 
+func TestCreateAcceptsRootMountDestination(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	source := filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, "home")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "root-mount",
+		EnvironmentName: "shell",
+		Mounts: []model.Mount{{
+			Source:      source,
+			Destination: "/root",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(created.Mounts) != 2 {
+		t.Fatalf("created mounts len = %d, want 2", len(created.Mounts))
+	}
+	if fake.lastCreate.Mounts[0].Destination != "/root" {
+		t.Fatalf("user mount = %+v, want /root", fake.lastCreate.Mounts[0])
+	}
+	if fake.lastCreate.Mounts[1].Destination != runtime.DefaultMountPath {
+		t.Fatalf("rootfs mount = %+v, want %s", fake.lastCreate.Mounts[1], runtime.DefaultMountPath)
+	}
+}
+
 func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
 	t.Parallel()
 
@@ -400,7 +445,7 @@ func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
 		EnvironmentName: "shell",
 		Mounts: []model.Mount{{
 			Source:      source,
-			Destination: "/root",
+			Destination: runtime.DefaultMountPath,
 		}},
 	})
 	if !errors.Is(err, ErrValidation) {
@@ -449,7 +494,7 @@ func TestCreateTemplateListsMountDefaults(t *testing.T) {
 	services, cleanup, _ := newTestServices(t)
 	defer cleanup()
 
-	for _, dir := range []string{"home", "pan", "skills", filepath.Join("chats", "chat-a"), filepath.Join("chats", "chat-b")} {
+	for _, dir := range []string{"home", "pan", "skills", "_session_", filepath.Join("chats", "chat-a"), filepath.Join("chats", "chat-b")} {
 		if err := os.MkdirAll(filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -777,7 +822,7 @@ func TestDailyOfficeSessionAllowsExplicitSkillsMount(t *testing.T) {
 		Name:            "daily-office",
 		ImageRepository: "daily-office",
 		ImageTag:        "latest",
-		DefaultCwd:      "/root",
+		DefaultCwd:      runtime.DefaultMountPath,
 		DefaultEnv: map[string]string{
 			"NODE_PATH": "/opt/daily-office/node_modules",
 			"PATH":      expectedPath,

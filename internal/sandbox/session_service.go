@@ -202,7 +202,7 @@ func (s *SessionService) CreateTemplate(context.Context) (*api.SessionCreateTemp
 			continue
 		}
 		name := strings.TrimSpace(entry.Name())
-		if name == "" || name == "chats" {
+		if name == "" || name == "chats" || "/"+name == runtime.DefaultMountPath {
 			continue
 		}
 		response.DefaultMounts = append(response.DefaultMounts, model.Mount{

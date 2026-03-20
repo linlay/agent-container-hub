@@ -2,7 +2,7 @@ name: shell
 description: Basic shell environment managed from directory-backed configs/.
 image_repository: busybox
 image_tag: latest
-default_cwd: /root
+default_cwd: /_session_
 enabled: true
 default_execute:
   command: /bin/sh
@@ -14,5 +14,5 @@ default_execute:
       echo "User: $(whoami)"
       echo "Working Dir: $(pwd)"
       echo "Uptime: $(uptime 2>/dev/null || echo 'N/A')"
-      ls -la /root/
+      ls -la /_session_/
 build: {}

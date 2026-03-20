@@ -72,7 +72,7 @@ func TestCLIProviderCreateDoesNotInspect(t *testing.T) {
 	info, err := provider.Create(context.Background(), CreateOptions{
 		Name:   "demo",
 		Image:  "busybox:latest",
-		Cwd:    "/root",
+		Cwd:    DefaultMountPath,
 		Labels: map[string]string{"custom": "1"},
 	})
 	if err != nil {
@@ -136,7 +136,7 @@ func TestCLIProviderExecReturnsExitCodeForCommandFailure(t *testing.T) {
 	result, err := provider.Exec(context.Background(), "demo", ExecOptions{
 		Command: "/bin/sh",
 		Args:    []string{"-lc", "exit 7"},
-		Cwd:     "/root",
+		Cwd:     DefaultMountPath,
 		Timeout: time.Second,
 	})
 	if err != nil {
