@@ -52,7 +52,7 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		Description:     strings.TrimSpace(req.Description),
 		ImageRepository: strings.TrimSpace(req.ImageRepository),
 		ImageTag:        strings.TrimSpace(req.ImageTag),
-		DefaultCwd:      sessionDefaultCwd(req.DefaultCwd),
+		DefaultCwd:      sessionDefaultCwd("", req.DefaultCwd),
 		DefaultEnv:      util.CloneMap(req.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), req.Mounts...),
 		Resources:       req.Resources,

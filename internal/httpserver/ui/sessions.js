@@ -11,7 +11,7 @@ import {
 } from "/ui/common.js";
 
 const DEFAULT_SESSION_STATUS_FILTER = "history";
-const RESERVED_SESSION_MOUNT_PATH = "/_session_";
+const RESERVED_SESSION_MOUNT_PATH = "/workspace";
 
 const state = {
   sessions: {
@@ -272,6 +272,7 @@ function resetCreateSessionForm() {
   state.createSession.mounts = [];
   createEnvironmentSelect.value = state.createSession.selectedEnvironment || "";
   document.getElementById("create-session-id").value = "";
+  document.getElementById("create-session-cwd").value = "";
   renderSessionMountEditor();
 }
 
@@ -862,6 +863,7 @@ async function initialize() {
         body: JSON.stringify({
           environment_name: environmentName,
           session_id: document.getElementById("create-session-id").value.trim(),
+          cwd: document.getElementById("create-session-cwd").value.trim(),
           mounts: collectCreateMountPayload(),
         }),
       });
@@ -909,7 +911,6 @@ async function initialize() {
     refreshEnvironmentMetadata(),
   ]);
   renderSessionDetail();
-  renderChatOptions();
 }
 
 initialize().catch((error) => {

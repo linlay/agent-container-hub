@@ -515,7 +515,7 @@ func TestSessionCreateTemplateEndpoint(t *testing.T) {
 	t.Parallel()
 
 	handler, cfg := newTestHandlerWithConfig(t, "")
-	for _, dir := range []string{"home", "pan", "skills", "_session_", filepath.Join("chats", "chat-1"), filepath.Join("chats", "chat-2")} {
+	for _, dir := range []string{"home", "pan", "skills", "workspace", filepath.Join("chats", "chat-1"), filepath.Join("chats", "chat-2")} {
 		if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -525,8 +525,8 @@ func TestSessionCreateTemplateEndpoint(t *testing.T) {
 	if template.MountTemplateRoot != cfg.SessionMountTemplateRoot {
 		t.Fatalf("MountTemplateRoot = %q, want %q", template.MountTemplateRoot, cfg.SessionMountTemplateRoot)
 	}
-	if len(template.DefaultMounts) != 3 {
-		t.Fatalf("default mounts len = %d, want 3", len(template.DefaultMounts))
+	if len(template.DefaultMounts) != 4 {
+		t.Fatalf("default mounts len = %d, want 4", len(template.DefaultMounts))
 	}
 }
 
@@ -598,6 +598,44 @@ func TestCreateSessionEndpointAcceptsMounts(t *testing.T) {
 	}
 	if created.Mounts[1].Destination != runtime.DefaultMountPath {
 		t.Fatalf("created mount = %+v, want rootfs mount at %s", created.Mounts[1], runtime.DefaultMountPath)
+	}
+}
+
+func TestCreateSessionEndpointAcceptsCwdAndCallerWorkspaceMount(t *testing.T) {
+	t.Parallel()
+
+	handler, cfg := newTestHandlerWithConfig(t, "")
+	if err := os.MkdirAll(filepath.Join(cfg.SessionMountTemplateRoot, "home"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(home) error = %v", err)
+	}
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	created := doJSON[api.CreateSessionResponse](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+		SessionID:       "with-cwd-and-workspace",
+		EnvironmentName: "shell",
+		Cwd:             "/workspace/chat-1",
+		Mounts: []model.Mount{{
+			Source:      filepath.Join(cfg.SessionMountTemplateRoot, "home"),
+			Destination: runtime.DefaultMountPath,
+		}},
+	}, http.StatusOK, "")
+	if created.DefaultCwd != "/workspace/chat-1" {
+		t.Fatalf("created.DefaultCwd = %q, want /workspace/chat-1", created.DefaultCwd)
+	}
+	if created.RootfsPath != "" {
+		t.Fatalf("created.RootfsPath = %q, want empty", created.RootfsPath)
+	}
+	if len(created.Mounts) != 1 || created.Mounts[0].Destination != runtime.DefaultMountPath {
+		t.Fatalf("created mounts = %+v, want caller-provided workspace mount only", created.Mounts)
 	}
 }
 

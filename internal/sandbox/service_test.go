@@ -102,6 +102,41 @@ func TestSessionCreateExecuteAndStop(t *testing.T) {
 	}
 }
 
+func TestCreateUsesRequestCwdOverride(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		DefaultCwd:      "/root/project",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "cwd-override",
+		EnvironmentName: "shell",
+		Cwd:             "/workspace/chat-123",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.DefaultCwd != "/workspace/chat-123" {
+		t.Fatalf("created.DefaultCwd = %q, want /workspace/chat-123", created.DefaultCwd)
+	}
+	if fake.lastCreate.Cwd != "/workspace/chat-123" {
+		t.Fatalf("runtime create cwd = %q, want /workspace/chat-123", fake.lastCreate.Cwd)
+	}
+}
+
 func TestSessionExecuteCanReuseSameRunningSession(t *testing.T) {
 	t.Parallel()
 
@@ -417,10 +452,10 @@ func TestCreateAcceptsRootMountDestination(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
+func TestCreateAcceptsCallerProvidedWorkspaceMount(t *testing.T) {
 	t.Parallel()
 
-	services, cleanup, _ := newTestServices(t)
+	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
 
 	source := filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, "home")
@@ -440,7 +475,8 @@ func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 
-	_, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+	rootfsPath := filepath.Join(services.sessions.cfg.RootfsRoot, "provided-workspace")
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
 		SessionID:       "reserved-workspace",
 		EnvironmentName: "shell",
 		Mounts: []model.Mount{{
@@ -448,8 +484,23 @@ func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
 			Destination: runtime.DefaultMountPath,
 		}},
 	})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.RootfsPath != "" {
+		t.Fatalf("created.RootfsPath = %q, want empty", created.RootfsPath)
+	}
+	if len(created.Mounts) != 1 {
+		t.Fatalf("created mounts len = %d, want 1", len(created.Mounts))
+	}
+	if fake.lastCreate.Mounts[0].Destination != runtime.DefaultMountPath {
+		t.Fatalf("workspace mount = %+v, want %s", fake.lastCreate.Mounts[0], runtime.DefaultMountPath)
+	}
+	if _, statErr := os.Stat(rootfsPath); !os.IsNotExist(statErr) {
+		t.Fatalf("rootfs stat error = %v, want not exist", statErr)
+	}
+	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
 	}
 }
 
@@ -494,7 +545,7 @@ func TestCreateTemplateListsMountDefaults(t *testing.T) {
 	services, cleanup, _ := newTestServices(t)
 	defer cleanup()
 
-	for _, dir := range []string{"home", "pan", "skills", "_session_", filepath.Join("chats", "chat-a"), filepath.Join("chats", "chat-b")} {
+	for _, dir := range []string{"home", "pan", "skills", "workspace", filepath.Join("chats", "chat-a"), filepath.Join("chats", "chat-b")} {
 		if err := os.MkdirAll(filepath.Join(services.sessions.cfg.SessionMountTemplateRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -507,10 +558,10 @@ func TestCreateTemplateListsMountDefaults(t *testing.T) {
 	if template.MountTemplateRoot != services.sessions.cfg.SessionMountTemplateRoot {
 		t.Fatalf("MountTemplateRoot = %q, want %q", template.MountTemplateRoot, services.sessions.cfg.SessionMountTemplateRoot)
 	}
-	if len(template.DefaultMounts) != 3 {
-		t.Fatalf("default mounts len = %d, want 3", len(template.DefaultMounts))
+	if len(template.DefaultMounts) != 4 {
+		t.Fatalf("default mounts len = %d, want 4", len(template.DefaultMounts))
 	}
-	if template.DefaultMounts[0].Destination != "/home" || template.DefaultMounts[1].Destination != "/pan" || template.DefaultMounts[2].Destination != "/skills" {
+	if template.DefaultMounts[0].Destination != "/chats" || template.DefaultMounts[1].Destination != "/home" || template.DefaultMounts[2].Destination != "/pan" || template.DefaultMounts[3].Destination != "/skills" {
 		t.Fatalf("default mounts = %+v", template.DefaultMounts)
 	}
 }

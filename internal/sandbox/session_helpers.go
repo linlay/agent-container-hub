@@ -24,11 +24,14 @@ func timeoutFor(timeoutMS int64, fallback time.Duration) time.Duration {
 	return time.Duration(timeoutMS) * time.Millisecond
 }
 
-func sessionDefaultCwd(cwd string) string {
-	if strings.TrimSpace(cwd) == "" {
-		return runtime.DefaultMountPath
+func sessionDefaultCwd(requestCwd, environmentCwd string) string {
+	if strings.TrimSpace(requestCwd) != "" {
+		return requestCwd
 	}
-	return cwd
+	if strings.TrimSpace(environmentCwd) != "" {
+		return environmentCwd
+	}
+	return runtime.DefaultMountPath
 }
 
 func validateSessionID(sessionID string) error {

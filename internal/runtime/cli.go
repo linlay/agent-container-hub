@@ -137,9 +137,8 @@ func (p *CLIProvider) Exec(ctx context.Context, containerID string, opts ExecOpt
 	if opts.Cwd != "" {
 		args = append(args, "--workdir", opts.Cwd)
 	}
-	args = append(args, containerID, opts.Command)
+	args = append(args, resolvedID, opts.Command)
 	args = append(args, opts.Args...)
-	args[len(args)-len(opts.Args)-2] = resolvedID
 	result, err := p.runCommand(execCtx, args...)
 	finishedAt := time.Now().UTC()
 

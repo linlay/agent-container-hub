@@ -1,11 +1,14 @@
 package model
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
 	"agent-container-hub/internal/util"
 )
+
+var ValidEnvironmentName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
 
 type Mount struct {
 	Source      string `json:"source" yaml:"source"`

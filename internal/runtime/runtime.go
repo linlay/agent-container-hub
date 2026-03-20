@@ -20,7 +20,7 @@ const (
 	SessionIDLabel   = "sandbox.session_id"
 	RootfsLabel      = "sandbox.rootfs"
 	CreatedAtLabel   = "sandbox.created_at"
-	DefaultMountPath = "/_session_"
+	DefaultMountPath = "/workspace"
 )
 
 type ContainerState string

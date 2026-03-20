@@ -165,7 +165,7 @@ func (s *BuildService) runSmokeCheck(ctx context.Context, environment *model.Env
 	info, err := s.runtime.Create(ctx, runtime.CreateOptions{
 		Name:  "smoke-" + name,
 		Image: environment.ImageRef(),
-		Cwd:   sessionDefaultCwd(environment.DefaultCwd),
+		Cwd:   sessionDefaultCwd("", environment.DefaultCwd),
 		Env:   util.CloneMap(environment.DefaultEnv),
 		Mounts: []model.Mount{{
 			Source:      workspace,
@@ -187,7 +187,7 @@ func (s *BuildService) runSmokeCheck(ctx context.Context, environment *model.Env
 	result, err := s.runtime.Exec(ctx, info.ID, runtime.ExecOptions{
 		Command: environment.Build.SmokeCommand,
 		Args:    append([]string(nil), environment.Build.SmokeArgs...),
-		Cwd:     sessionDefaultCwd(environment.DefaultCwd),
+		Cwd:     sessionDefaultCwd("", environment.DefaultCwd),
 		Timeout: 30 * time.Second,
 	})
 	if err != nil {

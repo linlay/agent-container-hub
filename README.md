@@ -147,7 +147,7 @@ STATE_DB_PATH=./data/agent-container-hub.db
 # Root directory for YAML environment/image configs.
 CONFIG_ROOT=./configs
 
-# Root directory for per-session rootfs directories mounted into containers at /_session_.
+# Root directory for per-session rootfs directories mounted into containers at /workspace.
 ROOTFS_ROOT=./data/rootfs
 
 # Root directory used for managed image builds and smoke-check temp files.
@@ -191,7 +191,8 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
   -H 'Content-Type: application/json' \
   -d '{
     "session_id": "demo-shell",
-    "environment_name": "shell"
+    "environment_name": "shell",
+    "cwd": "/workspace"
   }'
 ```
 
@@ -202,7 +203,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
   "session_id": "demo-shell",
   "environment_name": "shell",
   "image": "busybox:latest",
-  "cwd": "/_session_",
+  "cwd": "/workspace",
   "rootfs_path": "/absolute/path/to/data/rootfs/demo-shell",
   "mounts": [
     {
@@ -212,7 +213,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
     },
     {
       "source": "/absolute/path/to/data/rootfs/demo-shell",
-      "destination": "/_session_",
+      "destination": "/workspace",
       "read_only": false
     }
   ],
@@ -223,7 +224,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
 ```
 
 其中 `duration_ms` 是服务端处理 create 请求的总耗时毫秒数。
-`mounts` 中既包含 environment YAML 里定义的挂载，也包含系统自动追加的 `/_session_` 挂载。`/root` 已经留给调用方自定义 bind mount 使用；按照智能体平台常见用法，通常会看到 4 到 5 个业务目录加上 `/_session_`。
+`mounts` 中既包含 environment YAML 里定义的挂载，也包含系统自动追加的 `/workspace` 挂载。调用方也可以显式传入 `destination=/workspace` 覆盖默认 rootfs 挂载；未覆盖时，`/root` 已经留给调用方自定义 bind mount 使用，常见场景会看到 4 到 5 个业务目录加上 `/workspace`。
 
 执行命令示例：
 
@@ -243,7 +244,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/demo-shell/execute \
 {
   "session_id": "demo-shell",
   "exit_code": 0,
-  "stdout": "/_session_\nhello\n",
+  "stdout": "/workspace\nhello\n",
   "stderr": "",
   "timed_out": false,
   "duration_ms": 95,
@@ -309,7 +310,7 @@ curl -X POST http://127.0.0.1:11960/api/environments \
     "description": "basic shell environment",
     "image_repository": "busybox",
     "image_tag": "latest",
-    "default_cwd": "/_session_",
+    "default_cwd": "/workspace",
     "enabled": true,
     "build": {
       "dockerfile": "FROM busybox:latest\nCMD [\"/bin/sh\"]\n"
@@ -346,7 +347,7 @@ name: shell
 description: Basic shell environment managed from configs/.
 image_repository: busybox
 image_tag: latest
-default_cwd: /_session_
+default_cwd: /workspace
 enabled: true
 build:
   dockerfile: |
@@ -439,7 +440,7 @@ make docker-build
 - session 创建失败
   - 检查 `environment_name` 是否存在且已启用
   - 检查 `configs/environments/<name>.yaml` 是否存在且格式合法
-  - 检查 mount 的 `destination` 是否重复，且不要占用保留路径 `/_session_`
+  - 检查 mount 的 `destination` 是否重复；若显式使用保留路径 `/workspace`，会覆盖默认 rootfs 挂载
 - execute 日志为空
   - 检查是否设置了 `ENABLE_EXEC_LOG_PERSIST=true`
   - 检查 `EXEC_LOG_MAX_OUTPUT_BYTES` 是否过小导致输出被截断

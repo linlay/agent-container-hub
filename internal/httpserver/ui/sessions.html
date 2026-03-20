@@ -136,7 +136,8 @@
 						<h2>Create Session</h2>
 						<div class="meta">
 							Create a new active session from an enabled
-							registered environment with editable session mounts.
+							registered environment with editable session mounts
+							and cwd override.
 						</div>
 					</div>
 					<button
@@ -162,6 +163,16 @@
 							</label>
 						</div>
 
+						<div class="row">
+							<label
+								>Cwd
+								<input
+									id="create-session-cwd"
+									placeholder="/workspace"
+								/>
+							</label>
+						</div>
+
 						<div class="stack">
 							<div class="meta" id="create-environment-hint">
 								Loading enabled environments...
@@ -178,9 +189,10 @@
 										<div class="meta">
 											Mounts are only included when you add
 											them here. Template mounts stay
-											available as shortcuts, and `/_session_`
+											available as shortcuts, and `/workspace`
 											stays reserved for the auto workspace
-											mount.
+											mount unless you provide your own
+											`/workspace` mount.
 										</div>
 								</div>
 								<div class="actions">

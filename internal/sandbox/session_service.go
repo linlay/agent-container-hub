@@ -26,10 +26,6 @@ var (
 	ErrConflict   = errors.New("session configuration conflict")
 )
 
-type sessionLock struct {
-	_ struct{}
-}
-
 type SessionService struct {
 	cfg     config.Config
 	store   store.RuntimeStore
@@ -104,10 +100,16 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		return nil, fmt.Errorf("create rootfs: %w", err)
 	}
 
-	mounts, err := s.buildSessionMounts(environment.Mounts, req.Mounts, rootfsPath)
+	mounts, callerProvidesWorkspace, err := s.buildSessionMounts(environment.Mounts, req.Mounts, rootfsPath)
 	if err != nil {
 		_ = os.RemoveAll(rootfsPath)
 		return nil, err
+	}
+	if callerProvidesWorkspace {
+		if err := os.RemoveAll(rootfsPath); err != nil {
+			return nil, fmt.Errorf("remove unused rootfs: %w", err)
+		}
+		rootfsPath = ""
 	}
 
 	containerLabels := util.CloneMap(req.Labels)
@@ -115,14 +117,18 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		containerLabels = make(map[string]string)
 	}
 	containerLabels[runtime.SessionIDLabel] = sessionID
-	containerLabels[runtime.RootfsLabel] = rootfsPath
 	containerLabels[runtime.CreatedAtLabel] = time.Now().UTC().Format(time.RFC3339Nano)
 	containerLabels["sandbox.environment"] = environment.Name
+	if rootfsPath != "" {
+		containerLabels[runtime.RootfsLabel] = rootfsPath
+	}
+
+	cwd := sessionDefaultCwd(req.Cwd, environment.DefaultCwd)
 
 	info, err := s.runtime.Create(ctx, runtime.CreateOptions{
 		Name:      sessionID,
 		Image:     environment.ImageRef(),
-		Cwd:       sessionDefaultCwd(environment.DefaultCwd),
+		Cwd:       cwd,
 		Env:       util.CloneMap(environment.DefaultEnv),
 		Mounts:    mounts,
 		Resources: environment.Resources,
@@ -161,7 +167,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		ContainerID:     info.ID,
 		EnvironmentName: environment.Name,
 		Image:           environment.ImageRef(),
-		DefaultCwd:      sessionDefaultCwd(environment.DefaultCwd),
+		DefaultCwd:      cwd,
 		RootfsPath:      rootfsPath,
 		Env:             util.CloneMap(environment.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), mounts...),
@@ -202,7 +208,7 @@ func (s *SessionService) CreateTemplate(context.Context) (*api.SessionCreateTemp
 			continue
 		}
 		name := strings.TrimSpace(entry.Name())
-		if name == "" || name == "chats" || "/"+name == runtime.DefaultMountPath {
+		if name == "" || "/"+name == runtime.DefaultMountPath {
 			continue
 		}
 		response.DefaultMounts = append(response.DefaultMounts, model.Mount{
@@ -280,16 +286,13 @@ func (s *SessionService) execOnSession(ctx context.Context, session *model.Sessi
 		}
 		return runtime.ExecResult{}, fmt.Errorf("%w: session is no longer executable; recreate the session", ErrConflict)
 	}
-	if !errors.Is(err, runtime.ErrContainerNotFound) && !errors.Is(err, runtime.ErrContainerNotRunning) {
-		s.logger.Error("session exec failed",
-			"session_id", session.ID,
-			"container_id", target,
-			"command", execOpts.Command,
-			"cwd", execOpts.Cwd,
-			"error", err,
-		)
-		return runtime.ExecResult{}, err
-	}
+	s.logger.Error("session exec failed",
+		"session_id", session.ID,
+		"container_id", target,
+		"command", execOpts.Command,
+		"cwd", execOpts.Cwd,
+		"error", err,
+	)
 	return runtime.ExecResult{}, err
 }
 

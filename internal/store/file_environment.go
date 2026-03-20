@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -18,8 +17,6 @@ const (
 	environmentDockerfile    = "Dockerfile"
 	environmentBuildMakefile = "Makefile"
 )
-
-var validEnvironmentFilename = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
 
 type FileEnvironmentStore struct {
 	root string
@@ -198,7 +195,7 @@ func (s *FileEnvironmentStore) WriteEnvironmentFile(_ context.Context, name, rel
 		if strings.TrimSpace(environment.Name) == "" {
 			environment.Name = filepath.Base(dir)
 		}
-		if !validEnvironmentFilename.MatchString(environment.Name) {
+		if !model.ValidEnvironmentName.MatchString(environment.Name) {
 			return fmt.Errorf("parse environment file %s: invalid environment name %q", environmentMetadataFile, environment.Name)
 		}
 		if environment.Name != filepath.Base(dir) {
@@ -210,7 +207,7 @@ func (s *FileEnvironmentStore) WriteEnvironmentFile(_ context.Context, name, rel
 
 func (s *FileEnvironmentStore) environmentDir(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if !validEnvironmentFilename.MatchString(name) {
+	if !model.ValidEnvironmentName.MatchString(name) {
 		return "", fmt.Errorf("%w: invalid environment name %q", ErrNotFound, name)
 	}
 	return filepath.Join(s.root, name), nil
@@ -230,7 +227,7 @@ func (s *FileEnvironmentStore) loadEnvironment(dir string) (*model.Environment, 
 	if strings.TrimSpace(environment.Name) == "" {
 		environment.Name = baseName
 	}
-	if !validEnvironmentFilename.MatchString(environment.Name) {
+	if !model.ValidEnvironmentName.MatchString(environment.Name) {
 		return nil, fmt.Errorf("parse environment file %s: invalid environment name %q", filepath.Join(baseName, environmentMetadataFile), environment.Name)
 	}
 	if environment.Name != baseName {

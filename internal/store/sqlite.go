@@ -94,57 +94,7 @@ func (s *SQLiteStore) init() error {
 			return fmt.Errorf("init sqlite schema: %w", err)
 		}
 	}
-	if err := s.migrateLegacySessionColumns(); err != nil {
-		return err
-	}
 	return nil
-}
-
-func (s *SQLiteStore) migrateLegacySessionColumns() error {
-	hasRootfsPath, err := s.hasSessionColumn("rootfs_path")
-	if err != nil {
-		return err
-	}
-	if hasRootfsPath {
-		return nil
-	}
-	hasWorkspacePath, err := s.hasSessionColumn("workspace_path")
-	if err != nil {
-		return err
-	}
-	if !hasWorkspacePath {
-		return fmt.Errorf("init sqlite schema: sessions table is missing required rootfs_path column")
-	}
-	if _, err := s.db.Exec(`ALTER TABLE sessions RENAME COLUMN workspace_path TO rootfs_path`); err != nil {
-		return fmt.Errorf("migrate legacy workspace_path column: %w", err)
-	}
-	return nil
-}
-
-func (s *SQLiteStore) hasSessionColumn(name string) (bool, error) {
-	rows, err := s.db.Query(`PRAGMA table_info(sessions)`)
-	if err != nil {
-		return false, fmt.Errorf("inspect sessions table schema: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var columnName string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return false, fmt.Errorf("scan sessions table schema: %w", err)
-		}
-		if columnName == name {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("iterate sessions table schema: %w", err)
-	}
-	return false, nil
 }
 
 func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) error {

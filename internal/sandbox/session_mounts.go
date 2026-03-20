@@ -10,42 +10,53 @@ import (
 	"agent-container-hub/internal/runtime"
 )
 
-func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []model.Mount, workspacePath string) ([]model.Mount, error) {
+func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []model.Mount, rootfsPath string) ([]model.Mount, bool, error) {
 	normalizedEnvMounts, err := s.normalizeMountList(environmentMounts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	normalizedRequestMounts, err := s.normalizeMountList(requestMounts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	workspaceMount := model.Mount{
-		Source:      runtime.NormalizeMountSource(workspacePath),
+	callerProvidesWorkspace := false
+	for _, mount := range normalizedRequestMounts {
+		if mount.Destination == runtime.DefaultMountPath {
+			callerProvidesWorkspace = true
+			break
+		}
+	}
+
+	rootfsMount := model.Mount{
+		Source:      runtime.NormalizeMountSource(rootfsPath),
 		Destination: runtime.DefaultMountPath,
 	}
 
-	destinations := map[string]struct{}{
-		workspaceMount.Destination: {},
-	}
+	destinations := make(map[string]struct{})
 	for _, mount := range normalizedEnvMounts {
-		if err := validateMountDestination(mount.Destination, destinations); err != nil {
-			return nil, err
+		if mount.Destination == runtime.DefaultMountPath {
+			return nil, false, fmt.Errorf("%w: mount destination %s is reserved for the rootfs", ErrValidation, runtime.DefaultMountPath)
 		}
+		if err := validateMountDestination(mount.Destination, destinations); err != nil {
+			return nil, false, err
+		}
+	}
+	if !callerProvidesWorkspace {
+		destinations[rootfsMount.Destination] = struct{}{}
 	}
 	for _, mount := range normalizedRequestMounts {
-		if mount.Destination == runtime.DefaultMountPath {
-			return nil, fmt.Errorf("%w: mount destination %s is reserved for the rootfs", ErrValidation, runtime.DefaultMountPath)
-		}
 		if err := validateMountDestination(mount.Destination, destinations); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	mounts := append([]model.Mount(nil), normalizedEnvMounts...)
 	mounts = append(mounts, normalizedRequestMounts...)
-	mounts = append(mounts, workspaceMount)
-	return mounts, nil
+	if !callerProvidesWorkspace {
+		mounts = append(mounts, rootfsMount)
+	}
+	return mounts, callerProvidesWorkspace, nil
 }
 
 func (s *SessionService) normalizeMountList(mounts []model.Mount) ([]model.Mount, error) {
