@@ -53,11 +53,34 @@
 					<div class="row filters">
 						<label
 							>Status
-							<select id="session-filter-status">
-								<option value="history" selected>History</option>
-								<option value="active">Active</option>
-								<option value="all">All</option>
-							</select>
+							<div
+								class="filter-tag-group"
+								id="session-filter-status"
+								role="group"
+								aria-label="Session status filter"
+							>
+								<button
+									type="button"
+									class="filter-tag is-selected"
+									data-status-filter="history"
+								>
+									History
+								</button>
+								<button
+									type="button"
+									class="filter-tag"
+									data-status-filter="active"
+								>
+									Active
+								</button>
+								<button
+									type="button"
+									class="filter-tag"
+									data-status-filter="all"
+								>
+									All
+								</button>
+							</div>
 						</label>
 						<label
 							>Session ID

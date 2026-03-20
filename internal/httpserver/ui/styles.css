@@ -358,7 +358,7 @@ label {
 }
 
 .row.filters {
-  grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) 130px auto;
+  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 1fr) 130px auto;
   align-items: end;
 }
 
@@ -384,11 +384,12 @@ label {
 .filter-tag-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  min-height: 52px;
-  padding: 10px;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 3px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.92);
 }
 
@@ -396,7 +397,7 @@ label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 36px;
+  min-height: 30px;
   padding: 0 14px;
   color: var(--ink);
   font-weight: 600;
@@ -600,6 +601,10 @@ td strong {
   padding: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.detail-box strong {
+  word-break: break-all;
 }
 
 .mount-list,

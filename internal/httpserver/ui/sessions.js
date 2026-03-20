@@ -11,6 +11,7 @@ import {
 } from "/ui/common.js";
 
 const DEFAULT_SESSION_STATUS_FILTER = "history";
+const SESSION_STATUS_FILTER_OPTIONS = ["history", "active", "all"];
 
 const state = {
   sessions: {
@@ -420,6 +421,7 @@ function renderSessionTable() {
       <tr class="${state.sessions.selectedID === item.session_id ? "selected" : ""}">
         <td>
           <strong>${escapeHTML(item.session_id)}</strong>
+          <div class="cell-meta">${escapeHTML(item.container_id || "").substring(0, 32)}</div>
         </td>
         <td>${escapeHTML(item.environment_name)}</td>
         <td>
@@ -753,10 +755,38 @@ async function stopSession(sessionID, reopenDetail, button) {
   }
 }
 
+function renderSessionStatusFilterTags() {
+  const statusFilter = document.getElementById("session-filter-status");
+  if (!statusFilter) {
+    return;
+  }
+
+  statusFilter.querySelectorAll("[data-status-filter]").forEach((button) => {
+    const isSelected = button.dataset.statusFilter === state.sessions.filters.status;
+    button.classList.toggle("is-selected", isSelected);
+    button.setAttribute("aria-pressed", String(isSelected));
+  });
+}
+
 async function initialize() {
   initializeShell("sessions");
   bindModalDismiss();
-  document.getElementById("session-filter-status").value = state.sessions.filters.status;
+  renderSessionStatusFilterTags();
+
+  document.getElementById("session-filter-status").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-status-filter]");
+    if (!button) {
+      return;
+    }
+
+    const nextStatus = button.dataset.statusFilter;
+    if (!SESSION_STATUS_FILTER_OPTIONS.includes(nextStatus)) {
+      return;
+    }
+
+    state.sessions.filters.status = nextStatus;
+    renderSessionStatusFilterTags();
+  });
 
   createEnvironmentSelect.addEventListener("change", () => {
     state.createSession.selectedEnvironment = createEnvironmentSelect.value;
@@ -810,7 +840,6 @@ async function initialize() {
   });
 
   document.getElementById("apply-session-filter").addEventListener("click", async () => {
-    state.sessions.filters.status = document.getElementById("session-filter-status").value;
     state.sessions.filters.session_id = document.getElementById("session-filter-id").value.trim();
     state.sessions.filters.environment_name = document.getElementById("session-filter-environment").value.trim();
     state.sessions.pageSize = Number(document.getElementById("session-page-size").value) || 20;
@@ -823,7 +852,7 @@ async function initialize() {
     state.sessions.filters = { status: DEFAULT_SESSION_STATUS_FILTER, session_id: "", environment_name: "" };
     state.sessions.page = 1;
     state.sessions.pageSize = 20;
-    document.getElementById("session-filter-status").value = DEFAULT_SESSION_STATUS_FILTER;
+    renderSessionStatusFilterTags();
     document.getElementById("session-filter-id").value = "";
     document.getElementById("session-filter-environment").value = "";
     document.getElementById("session-page-size").value = "20";
