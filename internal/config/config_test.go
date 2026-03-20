@@ -21,7 +21,7 @@ func TestLoadNormalizesRelativePaths(t *testing.T) {
 
 	t.Setenv("STATE_DB_PATH", "./data/state.db")
 	t.Setenv("CONFIG_ROOT", "./configs")
-	t.Setenv("WORKSPACE_ROOT", "./data/workspaces")
+	t.Setenv("ROOTFS_ROOT", "./data/rootfs")
 	t.Setenv("BUILD_ROOT", "./data/builds")
 	t.Setenv("SESSION_MOUNT_TEMPLATE_ROOT", "./zenmind-env")
 
@@ -37,8 +37,8 @@ func TestLoadNormalizesRelativePaths(t *testing.T) {
 	if want := filepath.Join(currentWD, "data", "state.db"); cfg.StateDBPath != want {
 		t.Fatalf("StateDBPath = %q, want %q", cfg.StateDBPath, want)
 	}
-	if want := filepath.Join(currentWD, "data", "workspaces"); cfg.WorkspaceRoot != want {
-		t.Fatalf("WorkspaceRoot = %q, want %q", cfg.WorkspaceRoot, want)
+	if want := filepath.Join(currentWD, "data", "rootfs"); cfg.RootfsRoot != want {
+		t.Fatalf("RootfsRoot = %q, want %q", cfg.RootfsRoot, want)
 	}
 	if want := filepath.Join(currentWD, "configs"); cfg.ConfigRoot != want {
 		t.Fatalf("ConfigRoot = %q, want %q", cfg.ConfigRoot, want)
@@ -67,7 +67,7 @@ func TestLoadUsesRenamedDefaultStateDBPath(t *testing.T) {
 	t.Setenv("BIND_ADDR", "127.0.0.1:0")
 	t.Setenv("STATE_DB_PATH", "")
 	t.Setenv("CONFIG_ROOT", "")
-	t.Setenv("WORKSPACE_ROOT", "")
+	t.Setenv("ROOTFS_ROOT", "")
 	t.Setenv("BUILD_ROOT", "")
 	t.Setenv("SESSION_MOUNT_TEMPLATE_ROOT", "")
 
@@ -90,8 +90,8 @@ func TestLoadUsesRenamedDefaultStateDBPath(t *testing.T) {
 	if cfg.SessionMountTemplateRoot != "" {
 		t.Fatalf("SessionMountTemplateRoot = %q, want empty", cfg.SessionMountTemplateRoot)
 	}
-	if !cfg.DeleteWorkspaceOnStop {
-		t.Fatal("DeleteWorkspaceOnStop = false, want true")
+	if !cfg.DeleteRootfsOnStop {
+		t.Fatal("DeleteRootfsOnStop = false, want true")
 	}
 }
 
@@ -111,14 +111,14 @@ func TestLoadParsesHTTPLogFlags(t *testing.T) {
 	}
 }
 
-func TestLoadParsesDeleteWorkspaceOnStop(t *testing.T) {
-	t.Setenv("DELETE_WORKSPACE_ON_STOP", "false")
+func TestLoadParsesDeleteRootfsOnStop(t *testing.T) {
+	t.Setenv("DELETE_ROOTFS_ON_STOP", "false")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.DeleteWorkspaceOnStop {
-		t.Fatal("DeleteWorkspaceOnStop = true, want false")
+	if cfg.DeleteRootfsOnStop {
+		t.Fatal("DeleteRootfsOnStop = true, want false")
 	}
 }

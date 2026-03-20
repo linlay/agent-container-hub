@@ -14,12 +14,12 @@ type Config struct {
 	AuthToken                string
 	StateDBPath              string
 	ConfigRoot               string
-	WorkspaceRoot            string
+	RootfsRoot               string
 	BuildRoot                string
 	SessionMountTemplateRoot string
 	Engine                   string
 	DefaultCommandTimeout    time.Duration
-	DeleteWorkspaceOnStop    bool
+	DeleteRootfsOnStop       bool
 	HTTPAccessLogEnabled     bool
 	HTTPErrorLogEnabled      bool
 	EnableExecLogPersist     bool
@@ -36,12 +36,12 @@ func Load() (Config, error) {
 		AuthToken:                strings.TrimSpace(os.Getenv("AUTH_TOKEN")),
 		StateDBPath:              getEnv("STATE_DB_PATH", filepath.Join(cwd, "data", "agent-container-hub.db")),
 		ConfigRoot:               getEnv("CONFIG_ROOT", filepath.Join(cwd, "configs")),
-		WorkspaceRoot:            getEnv("WORKSPACE_ROOT", filepath.Join(cwd, "data", "workspaces")),
+		RootfsRoot:               getEnv("ROOTFS_ROOT", filepath.Join(cwd, "data", "rootfs")),
 		BuildRoot:                getEnv("BUILD_ROOT", filepath.Join(cwd, "data", "builds")),
 		SessionMountTemplateRoot: getEnv("SESSION_MOUNT_TEMPLATE_ROOT", ""),
 		Engine:                   strings.TrimSpace(os.Getenv("ENGINE")),
 		DefaultCommandTimeout:    getEnvDuration("DEFAULT_COMMAND_TIMEOUT", 30*time.Second),
-		DeleteWorkspaceOnStop:    getEnvBool("DELETE_WORKSPACE_ON_STOP", true),
+		DeleteRootfsOnStop:       getEnvBool("DELETE_ROOTFS_ON_STOP", true),
 		HTTPAccessLogEnabled:     getEnvBool("HTTP_ACCESS_LOG_ENABLED", false),
 		HTTPErrorLogEnabled:      getEnvBool("HTTP_ERROR_LOG_ENABLED", false),
 		EnableExecLogPersist:     getEnvBool("ENABLE_EXEC_LOG_PERSIST", false),
@@ -53,8 +53,8 @@ func Load() (Config, error) {
 	if cfg.ConfigRoot, err = absolutePath(cfg.ConfigRoot); err != nil {
 		return Config{}, fmt.Errorf("normalize config root: %w", err)
 	}
-	if cfg.WorkspaceRoot, err = absolutePath(cfg.WorkspaceRoot); err != nil {
-		return Config{}, fmt.Errorf("normalize workspace root: %w", err)
+	if cfg.RootfsRoot, err = absolutePath(cfg.RootfsRoot); err != nil {
+		return Config{}, fmt.Errorf("normalize rootfs root: %w", err)
 	}
 	if cfg.BuildRoot, err = absolutePath(cfg.BuildRoot); err != nil {
 		return Config{}, fmt.Errorf("normalize build root: %w", err)
@@ -79,7 +79,7 @@ func (c Config) Validate() error {
 	if host != "127.0.0.1" && host != "localhost" && host != "::1" && c.AuthToken == "" {
 		return fmt.Errorf("AUTH_TOKEN is required when binding to %q", host)
 	}
-	if c.StateDBPath == "" || c.ConfigRoot == "" || c.WorkspaceRoot == "" || c.BuildRoot == "" {
+	if c.StateDBPath == "" || c.ConfigRoot == "" || c.RootfsRoot == "" || c.BuildRoot == "" {
 		return fmt.Errorf("state paths are required")
 	}
 	if c.ExecLogMaxOutputBytes < 0 {

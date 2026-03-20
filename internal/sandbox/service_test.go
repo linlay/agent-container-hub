@@ -30,7 +30,7 @@ func TestSessionCreateExecuteAndStop(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace/project",
+		DefaultCwd:      "/root/project",
 		Enabled:         true,
 		Build: model.BuildSpec{
 			Dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]\n",
@@ -72,8 +72,8 @@ func TestSessionCreateExecuteAndStop(t *testing.T) {
 	if executed.DurationMS != 95 {
 		t.Fatalf("Execute() duration_ms = %d, want 95", executed.DurationMS)
 	}
-	if fake.lastExec.Cwd != "/workspace/project" {
-		t.Fatalf("lastExec cwd = %q, want /workspace/project", fake.lastExec.Cwd)
+	if fake.lastExec.Cwd != "/root/project" {
+		t.Fatalf("lastExec cwd = %q, want /root/project", fake.lastExec.Cwd)
 	}
 
 	stopped, err := services.sessions.Stop(context.Background(), created.SessionID)
@@ -112,7 +112,7 @@ func TestSessionExecuteCanReuseSameRunningSession(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		Enabled:         true,
 		Build: model.BuildSpec{
 			Dockerfile: "FROM busybox:latest\nCMD [\"/bin/sh\"]\n",
@@ -285,8 +285,8 @@ func TestCreateMergesEnvironmentAndSessionMounts(t *testing.T) {
 	if fake.lastCreate.Mounts[1].Destination != "/home" || fake.lastCreate.Mounts[1].ReadOnly {
 		t.Fatalf("session mount = %+v", fake.lastCreate.Mounts[1])
 	}
-	if fake.lastCreate.Mounts[2].Destination != "/workspace" {
-		t.Fatalf("workspace mount = %+v", fake.lastCreate.Mounts[2])
+	if fake.lastCreate.Mounts[2].Destination != "/root" {
+		t.Fatalf("rootfs mount = %+v", fake.lastCreate.Mounts[2])
 	}
 }
 
@@ -400,7 +400,7 @@ func TestCreateRejectsReservedWorkspaceMountDestination(t *testing.T) {
 		EnvironmentName: "shell",
 		Mounts: []model.Mount{{
 			Source:      source,
-			Destination: "/workspace",
+			Destination: "/root",
 		}},
 	})
 	if !errors.Is(err, ErrValidation) {
@@ -534,7 +534,7 @@ func TestExecuteFailsFastOnStoppedContainerAndMarksSessionStopped(t *testing.T) 
 	if stored.Status != string(model.SessionStatusStopped) {
 		t.Fatalf("stored.Status = %q, want stopped", stored.Status)
 	}
-	if _, statErr := os.Stat(created.WorkspacePath); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(created.RootfsPath); !os.IsNotExist(statErr) {
 		t.Fatalf("workspace stat error = %v, want not exist", statErr)
 	}
 }
@@ -767,7 +767,7 @@ func TestDailyOfficeSessionAllowsExplicitSkillsMount(t *testing.T) {
 	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
 
-	skillsRoot := filepath.Join(filepath.Dir(services.sessions.cfg.WorkspaceRoot), "skills-root")
+	skillsRoot := filepath.Join(filepath.Dir(services.sessions.cfg.RootfsRoot), "skills-root")
 	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skillsRoot) error = %v", err)
 	}
@@ -777,7 +777,7 @@ func TestDailyOfficeSessionAllowsExplicitSkillsMount(t *testing.T) {
 		Name:            "daily-office",
 		ImageRepository: "daily-office",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		DefaultEnv: map[string]string{
 			"NODE_PATH": "/opt/daily-office/node_modules",
 			"PATH":      expectedPath,
@@ -816,7 +816,7 @@ func TestDailyOfficeSessionAllowsExplicitSkillsMount(t *testing.T) {
 		t.Fatalf("skills mount = %+v", created.Mounts[0])
 	}
 	if created.Mounts[1].Destination != runtime.DefaultMountPath || created.Mounts[1].ReadOnly {
-		t.Fatalf("workspace mount = %+v", created.Mounts[1])
+		t.Fatalf("rootfs mount = %+v", created.Mounts[1])
 	}
 }
 
@@ -886,7 +886,7 @@ func TestEnvironmentUpdateDoesNotRewriteExistingSessionSnapshot(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace/one",
+		DefaultCwd:      "/root/one",
 		Enabled:         true,
 		Build: model.BuildSpec{
 			Dockerfile: "FROM busybox:latest\n",
@@ -903,7 +903,7 @@ func TestEnvironmentUpdateDoesNotRewriteExistingSessionSnapshot(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	initial.DefaultCwd = "/workspace/two"
+	initial.DefaultCwd = "/root/two"
 	if _, err := services.environments.Upsert(context.Background(), initial); err != nil {
 		t.Fatalf("Upsert(updated) error = %v", err)
 	}
@@ -911,7 +911,7 @@ func TestEnvironmentUpdateDoesNotRewriteExistingSessionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if stored.DefaultCwd != "/workspace/one" {
+	if stored.DefaultCwd != "/root/one" {
 		t.Fatalf("stored.DefaultCwd = %q, want original snapshot", stored.DefaultCwd)
 	}
 }
@@ -1365,7 +1365,7 @@ func TestStopRetainsWorkspaceWhenConfigured(t *testing.T) {
 	t.Parallel()
 
 	services, cleanup, _ := newTestServicesWithOptions(t, func(cfg *config.Config) {
-		cfg.DeleteWorkspaceOnStop = false
+		cfg.DeleteRootfsOnStop = false
 	})
 	defer cleanup()
 
@@ -1388,14 +1388,14 @@ func TestStopRetainsWorkspaceWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(created.WorkspacePath, "artifact.txt"), []byte("ok"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(created.RootfsPath, "artifact.txt"), []byte("ok"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
 	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(created.WorkspacePath, "artifact.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(created.RootfsPath, "artifact.txt")); err != nil {
 		t.Fatalf("Stat(artifact.txt) error = %v, want retained workspace", err)
 	}
 }
@@ -1475,18 +1475,18 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 		BindAddr:                 "127.0.0.1:0",
 		StateDBPath:              filepath.Join(tempDir, "agent-container-hub.db"),
 		ConfigRoot:               filepath.Join(tempDir, "configs"),
-		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
+		RootfsRoot:               filepath.Join(tempDir, "rootfs"),
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
 		DefaultCommandTimeout:    100 * time.Millisecond,
-		DeleteWorkspaceOnStop:    true,
+		DeleteRootfsOnStop:       true,
 		ExecLogMaxOutputBytes:    65536,
 	}
 	if configure != nil {
 		configure(&cfg)
 	}
-	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll(workspaces) error = %v", err)
+	if err := os.MkdirAll(cfg.RootfsRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootfs) error = %v", err)
 	}
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(builds) error = %v", err)

@@ -28,7 +28,7 @@ environment YAML 定义了：
 
 ### 2. 长生命周期 session
 
-每个 session 对应一个常驻容器和一个独立 workspace。
+每个 session 对应一个常驻容器和一个独立 rootfs 目录。
 你可以多次对同一个 session 执行命令，也可以随时停止它并在历史列表中继续查看快照与日志。
 
 ### 3. 平台托管镜像构建
@@ -53,7 +53,7 @@ environment 可以内嵌 Dockerfile。调用构建接口后，服务会：
 
 - Go 1.26
 - 已安装 `docker` 或 `podman`
-- 可写的本地目录用于数据库、workspace、build context
+- 可写的本地目录用于数据库、rootfs、build context
 
 ### 本地启动
 
@@ -66,7 +66,7 @@ cp .env.example .env
 - `BIND_ADDR=127.0.0.1:11960`
 - `STATE_DB_PATH=./data/agent-container-hub.db`
 - `CONFIG_ROOT=./configs`
-- `WORKSPACE_ROOT=./data/workspaces`
+- `ROOTFS_ROOT=./data/rootfs`
 - `BUILD_ROOT=./data/builds`
 - `ENGINE=` 留空自动探测，或显式指定 `docker` / `podman`
 
@@ -107,9 +107,9 @@ make test
 - `CONFIG_ROOT`
   - 默认值：`./configs`
   - environment / image YAML 配置根目录，实际环境文件位于 `configs/environments/*.yaml`
-- `WORKSPACE_ROOT`
-  - 默认值：`./data/workspaces`
-  - session workspace 根目录
+- `ROOTFS_ROOT`
+  - 默认值：`./data/rootfs`
+  - session rootfs 根目录
 - `BUILD_ROOT`
   - 默认值：`./data/builds`
   - environment build context 与 smoke check 临时目录根路径
@@ -122,9 +122,9 @@ make test
 - `DEFAULT_COMMAND_TIMEOUT`
   - 默认值：`30s`
   - execute 请求未显式提供 `timeout_ms` 时的默认超时
-- `DELETE_WORKSPACE_ON_STOP`
+- `DELETE_ROOTFS_ON_STOP`
   - 默认值：`true`
-  - session 停止或被校正为 stopped 时是否删除 workspace
+  - session 停止或被校正为 stopped 时是否删除 rootfs 目录
 - `ENABLE_EXEC_LOG_PERSIST`
   - 默认值：`false`
   - 是否持久化 execute 日志到 SQLite
@@ -147,8 +147,8 @@ STATE_DB_PATH=./data/agent-container-hub.db
 # Root directory for YAML environment/image configs.
 CONFIG_ROOT=./configs
 
-# Root directory for per-session workspaces mounted into containers at /workspace.
-WORKSPACE_ROOT=./data/workspaces
+# Root directory for per-session rootfs directories mounted into containers at /root.
+ROOTFS_ROOT=./data/rootfs
 
 # Root directory used for managed image builds and smoke-check temp files.
 BUILD_ROOT=./data/builds
@@ -162,8 +162,8 @@ ENGINE=
 # Default timeout used when execute requests omit timeout_ms.
 DEFAULT_COMMAND_TIMEOUT=30s
 
-# Delete the session workspace when a session stops.
-DELETE_WORKSPACE_ON_STOP=true
+# Delete the session rootfs directory when a session stops.
+DELETE_ROOTFS_ON_STOP=true
 
 # Persist execute logs into SQLite.
 ENABLE_EXEC_LOG_PERSIST=false
@@ -202,8 +202,8 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
   "session_id": "demo-shell",
   "environment_name": "shell",
   "image": "busybox:latest",
-  "cwd": "/workspace",
-  "workspace_path": "/absolute/path/to/data/workspaces/demo-shell",
+  "cwd": "/root",
+  "rootfs_path": "/absolute/path/to/data/rootfs/demo-shell",
   "mounts": [
     {
       "source": "/srv/agents/shared-tools",
@@ -211,8 +211,8 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
       "read_only": true
     },
     {
-      "source": "/absolute/path/to/data/workspaces/demo-shell",
-      "destination": "/workspace",
+      "source": "/absolute/path/to/data/rootfs/demo-shell",
+      "destination": "/root",
       "read_only": false
     }
   ],
@@ -223,7 +223,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/create \
 ```
 
 其中 `duration_ms` 是服务端处理 create 请求的总耗时毫秒数。
-`mounts` 中既包含 environment YAML 里定义的挂载，也包含系统自动追加的 `/workspace` 挂载。按照智能体平台常见用法，通常会看到 4 到 5 个业务目录加上 `/workspace`。
+`mounts` 中既包含 environment YAML 里定义的挂载，也包含系统自动追加的 `/root` 挂载。按照智能体平台常见用法，通常会看到 4 到 5 个业务目录加上 `/root`。
 
 执行命令示例：
 
@@ -243,7 +243,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/demo-shell/execute \
 {
   "session_id": "demo-shell",
   "exit_code": 0,
-  "stdout": "/workspace\nhello\n",
+  "stdout": "/root\nhello\n",
   "stderr": "",
   "timed_out": false,
   "duration_ms": 95,
@@ -309,7 +309,7 @@ curl -X POST http://127.0.0.1:11960/api/environments \
     "description": "basic shell environment",
     "image_repository": "busybox",
     "image_tag": "latest",
-    "default_cwd": "/workspace",
+    "default_cwd": "/root",
     "enabled": true,
     "build": {
       "dockerfile": "FROM busybox:latest\nCMD [\"/bin/sh\"]\n"
@@ -346,7 +346,7 @@ name: shell
 description: Basic shell environment managed from configs/.
 image_repository: busybox
 image_tag: latest
-default_cwd: /workspace
+default_cwd: /root
 enabled: true
 build:
   dockerfile: |
@@ -416,7 +416,7 @@ make build
 
 生产环境建议：
 
-- 将 `STATE_DB_PATH`、`CONFIG_ROOT`、`WORKSPACE_ROOT`、`BUILD_ROOT` 指向持久化磁盘
+- 将 `STATE_DB_PATH`、`CONFIG_ROOT`、`ROOTFS_ROOT`、`BUILD_ROOT` 指向持久化磁盘
 - 使用 systemd、supervisor 或类似工具托管进程
 - 对外监听时务必设置 `AUTH_TOKEN`
 - 预先确认宿主机容器引擎权限、镜像仓库登录状态和 socket 可用性
@@ -434,12 +434,12 @@ make docker-build
 - 服务启动失败
   - 检查 `docker` / `podman` 是否可执行
   - 检查 `AUTH_TOKEN` 是否满足非本地监听要求
-  - 检查 `STATE_DB_PATH`、`WORKSPACE_ROOT`、`BUILD_ROOT` 的父目录是否可写
+  - 检查 `STATE_DB_PATH`、`ROOTFS_ROOT`、`BUILD_ROOT` 的父目录是否可写
   - 若 `STATE_DB_PATH` 指向旧 bbolt 文件，服务会直接报错；请改成新的 SQLite 文件路径
 - session 创建失败
   - 检查 `environment_name` 是否存在且已启用
   - 检查 `configs/environments/<name>.yaml` 是否存在且格式合法
-  - 检查 mount 的 `destination` 是否重复，且不要占用保留路径 `/workspace`
+  - 检查 mount 的 `destination` 是否重复，且不要占用保留路径 `/root`
 - execute 日志为空
   - 检查是否设置了 `ENABLE_EXEC_LOG_PERSIST=true`
   - 检查 `EXEC_LOG_MAX_OUTPUT_BYTES` 是否过小导致输出被截断

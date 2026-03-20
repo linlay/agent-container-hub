@@ -106,7 +106,7 @@ func sessionToResponse(session *model.Session) *api.SessionResponse {
 		ContainerID:     session.ContainerID,
 		Image:           session.Image,
 		DefaultCwd:      session.DefaultCwd,
-		WorkspacePath:   session.WorkspacePath,
+		RootfsPath:      session.RootfsPath,
 		Labels:          util.CloneMap(session.Labels),
 		Resources:       session.Resources,
 		Mounts:          append([]model.Mount(nil), session.Mounts...),

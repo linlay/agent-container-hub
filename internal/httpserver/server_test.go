@@ -426,7 +426,7 @@ func TestEnvironmentAPIRoundTripsDefaultExecute(t *testing.T) {
 		DefaultExecute: model.ExecutePreset{
 			Command:   "pwd",
 			Args:      []string{"-L"},
-			Cwd:       "/workspace",
+			Cwd:       "/root",
 			TimeoutMS: 1234,
 		},
 		Build: model.BuildSpec{
@@ -697,11 +697,11 @@ func newTestHandlerWithRuntimeAndOptions(t *testing.T, authToken string, options
 		AuthToken:                authToken,
 		StateDBPath:              filepath.Join(tempDir, "agent-container-hub.db"),
 		ConfigRoot:               filepath.Join(tempDir, "configs"),
-		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
+		RootfsRoot:               filepath.Join(tempDir, "rootfs"),
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
 		DefaultCommandTimeout:    time.Second,
-		DeleteWorkspaceOnStop:    true,
+		DeleteRootfsOnStop:       true,
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,
 	}
@@ -718,11 +718,11 @@ func newHandlerForConfigRoot(t *testing.T, authToken, configRoot string) http.Ha
 		AuthToken:                authToken,
 		StateDBPath:              filepath.Join(tempDir, "agent-container-hub.db"),
 		ConfigRoot:               configRoot,
-		WorkspaceRoot:            filepath.Join(tempDir, "workspaces"),
+		RootfsRoot:               filepath.Join(tempDir, "rootfs"),
 		BuildRoot:                filepath.Join(tempDir, "builds"),
 		SessionMountTemplateRoot: filepath.Join(tempDir, "zenmind-env"),
 		DefaultCommandTimeout:    time.Second,
-		DeleteWorkspaceOnStop:    true,
+		DeleteRootfsOnStop:       true,
 		EnableExecLogPersist:     true,
 		ExecLogMaxOutputBytes:    65536,
 	}
@@ -743,8 +743,8 @@ func newHandlerForConfigWithOptions(t *testing.T, cfg config.Config, options Opt
 func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, options Options) (http.Handler, config.Config, *httpFakeRuntime) {
 	t.Helper()
 
-	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll(workspaces) error = %v", err)
+	if err := os.MkdirAll(cfg.RootfsRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootfs) error = %v", err)
 	}
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(builds) error = %v", err)

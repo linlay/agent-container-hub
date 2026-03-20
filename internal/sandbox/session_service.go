@@ -99,14 +99,14 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		return nil, err
 	}
 
-	workspacePath := filepath.Join(s.cfg.WorkspaceRoot, sessionID)
-	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
-		return nil, fmt.Errorf("create workspace: %w", err)
+	rootfsPath := filepath.Join(s.cfg.RootfsRoot, sessionID)
+	if err := os.MkdirAll(rootfsPath, 0o755); err != nil {
+		return nil, fmt.Errorf("create rootfs: %w", err)
 	}
 
-	mounts, err := s.buildSessionMounts(environment.Mounts, req.Mounts, workspacePath)
+	mounts, err := s.buildSessionMounts(environment.Mounts, req.Mounts, rootfsPath)
 	if err != nil {
-		_ = os.RemoveAll(workspacePath)
+		_ = os.RemoveAll(rootfsPath)
 		return nil, err
 	}
 
@@ -115,7 +115,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		containerLabels = make(map[string]string)
 	}
 	containerLabels[runtime.SessionIDLabel] = sessionID
-	containerLabels[runtime.WorkspaceLabel] = workspacePath
+	containerLabels[runtime.RootfsLabel] = rootfsPath
 	containerLabels[runtime.CreatedAtLabel] = time.Now().UTC().Format(time.RFC3339Nano)
 	containerLabels["sandbox.environment"] = environment.Name
 
@@ -129,7 +129,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		Labels:    containerLabels,
 	})
 	if err != nil {
-		_ = os.RemoveAll(workspacePath)
+		_ = os.RemoveAll(rootfsPath)
 		if errors.Is(err, runtime.ErrContainerExists) {
 			return nil, fmt.Errorf("%w: session already exists", ErrConflict)
 		}
@@ -137,7 +137,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 			"session_id", sessionID,
 			"environment", environment.Name,
 			"image", environment.ImageRef(),
-			"workspace", workspacePath,
+			"rootfs", rootfsPath,
 			"error", err,
 		)
 		return nil, err
@@ -152,7 +152,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 			"error", err,
 		)
 		_ = s.runtime.Remove(ctx, info.ID)
-		_ = os.RemoveAll(workspacePath)
+		_ = os.RemoveAll(rootfsPath)
 		return nil, err
 	}
 
@@ -162,7 +162,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		EnvironmentName: environment.Name,
 		Image:           environment.ImageRef(),
 		DefaultCwd:      sessionDefaultCwd(environment.DefaultCwd),
-		WorkspacePath:   workspacePath,
+		RootfsPath:      rootfsPath,
 		Env:             util.CloneMap(environment.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), mounts...),
 		Resources:       environment.Resources,
@@ -338,7 +338,7 @@ func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopS
 		)
 		return nil, err
 	}
-	if err := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteWorkspaceOnStop); err != nil {
+	if err := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteRootfsOnStop); err != nil {
 		return nil, err
 	}
 
@@ -442,7 +442,7 @@ func (s *SessionService) Reconcile(ctx context.Context) error {
 		info, err := s.inspectSession(ctx, session)
 		if err != nil {
 			if errors.Is(err, runtime.ErrContainerNotFound) {
-				if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteWorkspaceOnStop); markErr != nil {
+				if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteRootfsOnStop); markErr != nil {
 					return markErr
 				}
 				continue
@@ -450,7 +450,7 @@ func (s *SessionService) Reconcile(ctx context.Context) error {
 			return err
 		}
 		if info.State != runtime.ContainerRunning {
-			if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteWorkspaceOnStop); markErr != nil {
+			if markErr := s.markSessionStopped(ctx, session, time.Now().UTC(), s.cfg.DeleteRootfsOnStop); markErr != nil {
 				return markErr
 			}
 			continue
@@ -465,20 +465,20 @@ func (s *SessionService) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (s *SessionService) markSessionStopped(ctx context.Context, session *model.Session, stoppedAt time.Time, removeWorkspace bool) error {
+func (s *SessionService) markSessionStopped(ctx context.Context, session *model.Session, stoppedAt time.Time, removeRootfs bool) error {
 	session.Status = model.SessionStatusStopped
 	session.StoppedAt = stoppedAt.UTC()
 	if err := s.store.SaveSession(ctx, session); err != nil {
 		return err
 	}
 
-	var workspaceErr error
-	if removeWorkspace && session.WorkspacePath != "" {
-		if err := os.RemoveAll(session.WorkspacePath); err != nil {
-			workspaceErr = fmt.Errorf("delete workspace: %w", err)
+	var rootfsErr error
+	if removeRootfs && session.RootfsPath != "" {
+		if err := os.RemoveAll(session.RootfsPath); err != nil {
+			rootfsErr = fmt.Errorf("delete rootfs: %w", err)
 		}
 	}
-	return workspaceErr
+	return rootfsErr
 }
 
 func (s *SessionService) inspectSession(ctx context.Context, session *model.Session) (runtime.ContainerInfo, error) {
@@ -529,5 +529,5 @@ func (s *SessionService) markSessionUnavailable(ctx context.Context, session *mo
 		)
 		return err
 	}
-	return s.markSessionStopped(ctx, session, stoppedAt, s.cfg.DeleteWorkspaceOnStop)
+	return s.markSessionStopped(ctx, session, stoppedAt, s.cfg.DeleteRootfsOnStop)
 }

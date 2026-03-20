@@ -85,7 +85,7 @@ type SessionResponse struct {
 	ContainerID     string             `json:"container_id,omitempty"`
 	Image           string             `json:"image"`
 	DefaultCwd      string             `json:"cwd"`
-	WorkspacePath   string             `json:"workspace_path"`
+	RootfsPath      string             `json:"rootfs_path"`
 	Labels          map[string]string  `json:"labels,omitempty"`
 	Resources       model.ResourceSpec `json:"resources"`
 	Mounts          []model.Mount      `json:"mounts,omitempty"`

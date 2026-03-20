@@ -41,7 +41,7 @@
 ## 4. 主要模型
 
 - `model.Session`
-  - `environment_name`、镜像、workspace、快照化 env/mount/resource
+  - `environment_name`、镜像、rootfs、快照化 env/mount/resource
 - `model.Environment`
   - `name`、`image_repository`、`image_tag`
   - `default_cwd`、`default_env`、`mounts`、`resources`

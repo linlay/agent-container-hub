@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"agent-container-hub/internal/model"
+	_ "modernc.org/sqlite"
 )
 
 func TestOpenRejectsLegacyNonSQLiteFile(t *testing.T) {
@@ -85,8 +87,8 @@ func TestQuerySessionsAndExecutions(t *testing.T) {
 		ID:              "active-session",
 		EnvironmentName: "shell",
 		Image:           "busybox:latest",
-		DefaultCwd:      "/workspace",
-		WorkspacePath:   "/tmp/active",
+		DefaultCwd:      "/root",
+		RootfsPath:      "/tmp/active",
 		Status:          model.SessionStatusActive,
 		CreatedAt:       now,
 	}
@@ -94,8 +96,8 @@ func TestQuerySessionsAndExecutions(t *testing.T) {
 		ID:              "history-session",
 		EnvironmentName: "python",
 		Image:           "python:3.11",
-		DefaultCwd:      "/workspace",
-		WorkspacePath:   "/tmp/history",
+		DefaultCwd:      "/root",
+		RootfsPath:      "/tmp/history",
 		Status:          model.SessionStatusStopped,
 		CreatedAt:       now.Add(time.Minute),
 		StoppedAt:       now.Add(2 * time.Minute),
@@ -140,7 +142,7 @@ func TestQuerySessionsAndExecutions(t *testing.T) {
 		SessionID:       history.ID,
 		Command:         "echo",
 		Args:            []string{"hello"},
-		Cwd:             "/workspace",
+		Cwd:             "/root",
 		TimeoutMS:       30000,
 		ExitCode:        0,
 		Stdout:          "abcd",
@@ -180,8 +182,8 @@ func TestListSessionsReturnsAllActivePages(t *testing.T) {
 			ID:              fmt.Sprintf("session-%03d", i),
 			EnvironmentName: "shell",
 			Image:           "busybox:latest",
-			DefaultCwd:      "/workspace",
-			WorkspacePath:   filepath.Join("/tmp", fmt.Sprintf("session-%03d", i)),
+			DefaultCwd:      "/root",
+			RootfsPath:      filepath.Join("/tmp", fmt.Sprintf("session-%03d", i)),
 			Status:          model.SessionStatusActive,
 			CreatedAt:       now.Add(time.Duration(i) * time.Second),
 		}
@@ -217,4 +219,50 @@ func containsAll(value string, parts ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestOpenMigratesLegacyWorkspacePathColumn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE sessions (
+		session_id TEXT PRIMARY KEY,
+		container_id TEXT NOT NULL DEFAULT '',
+		environment_name TEXT NOT NULL,
+		image TEXT NOT NULL,
+		default_cwd TEXT NOT NULL,
+		workspace_path TEXT NOT NULL,
+		env_json TEXT NOT NULL DEFAULT '{}',
+		mounts_json TEXT NOT NULL DEFAULT '[]',
+		resources_json TEXT NOT NULL DEFAULT '{}',
+		labels_json TEXT NOT NULL DEFAULT '{}',
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		stopped_at TEXT
+	);`); err != nil {
+		t.Fatalf("create legacy sessions table error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO sessions (session_id, container_id, environment_name, image, default_cwd, workspace_path, status, created_at) VALUES ('legacy', '', 'shell', 'busybox:latest', '/root', '/tmp/legacy', 'active', '2026-03-18T10:00:00Z')`); err != nil {
+		t.Fatalf("insert legacy session error = %v", err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	session, err := st.GetSession(context.Background(), "legacy")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if session.RootfsPath != "/tmp/legacy" {
+		t.Fatalf("RootfsPath = %q, want /tmp/legacy", session.RootfsPath)
+	}
 }

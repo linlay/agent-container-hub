@@ -20,7 +20,7 @@ func TestFileEnvironmentStoreSaveAndGet(t *testing.T) {
 		Description:     "basic shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		DefaultEnv:      map[string]string{"FOO": "bar"},
 		Enabled:         true,
 		Build: model.BuildSpec{
@@ -92,7 +92,7 @@ func TestFileEnvironmentStoreGetIgnoresUnrelatedInvalidYAML(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		Enabled:         true,
 		Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
 	}); err != nil {
@@ -122,7 +122,7 @@ func TestFileEnvironmentStoreUsesFileMTimeForTimestamps(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		Enabled:         true,
 		Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
 	}); err != nil {
@@ -151,7 +151,7 @@ func TestFileEnvironmentStoreListReadAndWriteEnvironmentFiles(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		Enabled:         true,
 		Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
 	}); err != nil {
@@ -190,7 +190,7 @@ func TestFileEnvironmentStoreRejectsInvalidEnvironmentFilePaths(t *testing.T) {
 		Name:            "shell",
 		ImageRepository: "busybox",
 		ImageTag:        "latest",
-		DefaultCwd:      "/workspace",
+		DefaultCwd:      "/root",
 		Enabled:         true,
 		Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
 	}); err != nil {

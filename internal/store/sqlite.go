@@ -47,7 +47,7 @@ func (s *SQLiteStore) init() error {
 			environment_name TEXT NOT NULL,
 			image TEXT NOT NULL,
 			default_cwd TEXT NOT NULL,
-			workspace_path TEXT NOT NULL,
+			rootfs_path TEXT NOT NULL,
 			env_json TEXT NOT NULL DEFAULT '{}',
 			mounts_json TEXT NOT NULL DEFAULT '[]',
 			resources_json TEXT NOT NULL DEFAULT '{}',
@@ -94,7 +94,57 @@ func (s *SQLiteStore) init() error {
 			return fmt.Errorf("init sqlite schema: %w", err)
 		}
 	}
+	if err := s.migrateLegacySessionColumns(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *SQLiteStore) migrateLegacySessionColumns() error {
+	hasRootfsPath, err := s.hasSessionColumn("rootfs_path")
+	if err != nil {
+		return err
+	}
+	if hasRootfsPath {
+		return nil
+	}
+	hasWorkspacePath, err := s.hasSessionColumn("workspace_path")
+	if err != nil {
+		return err
+	}
+	if !hasWorkspacePath {
+		return fmt.Errorf("init sqlite schema: sessions table is missing required rootfs_path column")
+	}
+	if _, err := s.db.Exec(`ALTER TABLE sessions RENAME COLUMN workspace_path TO rootfs_path`); err != nil {
+		return fmt.Errorf("migrate legacy workspace_path column: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) hasSessionColumn(name string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(sessions)`)
+	if err != nil {
+		return false, fmt.Errorf("inspect sessions table schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var columnName string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, fmt.Errorf("scan sessions table schema: %w", err)
+		}
+		if columnName == name {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate sessions table schema: %w", err)
+	}
+	return false, nil
 }
 
 func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) error {
@@ -122,7 +172,7 @@ func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) err
 
 	_, err = s.db.Exec(`
 		INSERT INTO sessions (
-			session_id, container_id, environment_name, image, default_cwd, workspace_path,
+			session_id, container_id, environment_name, image, default_cwd, rootfs_path,
 			env_json, mounts_json, resources_json, labels_json, status, created_at, stopped_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
@@ -130,7 +180,7 @@ func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) err
 			environment_name=excluded.environment_name,
 			image=excluded.image,
 			default_cwd=excluded.default_cwd,
-			workspace_path=excluded.workspace_path,
+			rootfs_path=excluded.rootfs_path,
 			env_json=excluded.env_json,
 			mounts_json=excluded.mounts_json,
 			resources_json=excluded.resources_json,
@@ -138,7 +188,7 @@ func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) err
 			status=excluded.status,
 			created_at=excluded.created_at,
 			stopped_at=excluded.stopped_at
-	`, session.ID, session.ContainerID, session.EnvironmentName, session.Image, session.DefaultCwd, session.WorkspacePath,
+	`, session.ID, session.ContainerID, session.EnvironmentName, session.Image, session.DefaultCwd, session.RootfsPath,
 		envJSON, mountsJSON, resourcesJSON, labelsJSON, string(session.Status), session.CreatedAt.UTC().Format(time.RFC3339Nano), stoppedAt)
 	if err != nil {
 		return fmt.Errorf("save session: %w", err)
@@ -148,7 +198,7 @@ func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) err
 
 func (s *SQLiteStore) GetSession(_ context.Context, id string) (*model.Session, error) {
 	row := s.db.QueryRow(`
-		SELECT session_id, container_id, environment_name, image, default_cwd, workspace_path,
+		SELECT session_id, container_id, environment_name, image, default_cwd, rootfs_path,
 		       env_json, mounts_json, resources_json, labels_json, status, created_at, stopped_at
 		FROM sessions
 		WHERE session_id = ?
@@ -220,7 +270,7 @@ func (s *SQLiteStore) QuerySessions(_ context.Context, query SessionQuery) ([]*m
 
 	queryArgs := append(append([]any(nil), args...), pageSize, (page-1)*pageSize)
 	rows, err := s.db.Query(`
-		SELECT session_id, container_id, environment_name, image, default_cwd, workspace_path,
+		SELECT session_id, container_id, environment_name, image, default_cwd, rootfs_path,
 		       env_json, mounts_json, resources_json, labels_json, status, created_at, stopped_at
 		FROM sessions`+whereSQL+`
 		ORDER BY created_at DESC, session_id DESC
@@ -392,7 +442,7 @@ func scanSession(scanner rowScanner) (*model.Session, error) {
 		&session.EnvironmentName,
 		&session.Image,
 		&session.DefaultCwd,
-		&session.WorkspacePath,
+		&session.RootfsPath,
 		&envJSON,
 		&mountsJSON,
 		&resourcesJSON,

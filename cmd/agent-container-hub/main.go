@@ -23,8 +23,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
-		log.Fatalf("create workspace root: %v", err)
+	if err := os.MkdirAll(cfg.RootfsRoot, 0o755); err != nil {
+		log.Fatalf("create rootfs root: %v", err)
 	}
 	if err := os.MkdirAll(cfg.BuildRoot, 0o755); err != nil {
 		log.Fatalf("create build root: %v", err)

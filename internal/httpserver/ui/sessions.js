@@ -482,8 +482,8 @@ function renderSessionDetail() {
   }
 
   const mounts = (item.mounts || []).map((mount) => {
-    const kind = mount.destination === "/workspace" && mount.source === item.workspace_path
-      ? "workspace mount"
+    const kind = mount.destination === "/root" && mount.source === item.rootfs_path
+      ? "rootfs mount"
       : "snapshot mount";
     return `
       <div class="mount-item">
@@ -510,14 +510,14 @@ function renderSessionDetail() {
       <div class="detail-box"><div class="meta">Cwd</div><strong>${escapeHTML(item.cwd || "-")}</strong></div>
       <div class="detail-box"><div class="meta">Created At</div><strong>${escapeHTML(formatTime(item.created_at))}</strong></div>
       <div class="detail-box"><div class="meta">Stopped At</div><strong>${escapeHTML(formatTime(item.stopped_at))}</strong></div>
-      <div class="detail-box"><div class="meta">Workspace</div><strong>${escapeHTML(item.workspace_path || "-")}</strong></div>
+      <div class="detail-box"><div class="meta">Rootfs</div><strong>${escapeHTML(item.rootfs_path || "-")}</strong></div>
       <div class="detail-box"><div class="meta">Container ID</div><strong>${escapeHTML(item.container_id || "-")}</strong></div>
     </div>
 
     <div class="stack">
       <div>
         <h3>Mount Snapshot</h3>
-        <div class="meta">Shows the persisted session mount snapshot, including configured mounts and the auto workspace mount.</div>
+        <div class="meta">Shows the persisted session mount snapshot, including configured mounts and the auto rootfs mount.</div>
       </div>
       <div class="mount-list">${mounts}</div>
     </div>

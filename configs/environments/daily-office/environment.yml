@@ -2,7 +2,7 @@ name: daily-office
 description: Daily office runtime with directory-managed build assets and optional runtime-mounted skills under /skills.
 image_repository: daily-office
 image_tag: latest
-default_cwd: /workspace
+default_cwd: /root
 default_env:
   DAILY_OFFICE_HOME: /opt/daily-office
   NODE_PATH: /opt/daily-office/node_modules
@@ -17,7 +17,7 @@ default_execute:
       echo "Hostname: $(hostname)"
       echo "User: $(whoami)"
       echo "Working Dir: $(pwd)"
-      echo "Disk Usage: $(df -h /workspace | tail -1)"
+      echo "Disk Usage: $(df -h /root | tail -1)"
       echo ""
       echo "=== Tool Versions ==="
       echo "Python: $(python --version 2>&1)"

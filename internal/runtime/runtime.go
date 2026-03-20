@@ -18,9 +18,9 @@ var (
 const (
 	ManagedByLabel   = "sandbox.managed_by"
 	SessionIDLabel   = "sandbox.session_id"
-	WorkspaceLabel   = "sandbox.workspace"
+	RootfsLabel      = "sandbox.rootfs"
 	CreatedAtLabel   = "sandbox.created_at"
-	DefaultMountPath = "/workspace"
+	DefaultMountPath = "/root"
 )
 
 type ContainerState string

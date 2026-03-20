@@ -129,7 +129,7 @@ type Session struct {
 	EnvironmentName string            `json:"environment_name"`
 	Image           string            `json:"image"`
 	DefaultCwd      string            `json:"cwd"`
-	WorkspacePath   string            `json:"workspace_path"`
+	RootfsPath      string            `json:"rootfs_path"`
 	Env             map[string]string `json:"env,omitempty"`
 	Mounts          []Mount           `json:"mounts,omitempty"`
 	Resources       ResourceSpec      `json:"resources"`

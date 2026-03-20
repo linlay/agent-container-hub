@@ -35,7 +35,7 @@ func (s *SessionService) buildSessionMounts(environmentMounts, requestMounts []m
 	}
 	for _, mount := range normalizedRequestMounts {
 		if mount.Destination == runtime.DefaultMountPath {
-			return nil, fmt.Errorf("%w: mount destination %s is reserved for the workspace", ErrValidation, runtime.DefaultMountPath)
+			return nil, fmt.Errorf("%w: mount destination %s is reserved for the rootfs", ErrValidation, runtime.DefaultMountPath)
 		}
 		if err := validateMountDestination(mount.Destination, destinations); err != nil {
 			return nil, err
