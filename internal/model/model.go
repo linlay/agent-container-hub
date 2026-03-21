@@ -44,6 +44,7 @@ type Environment struct {
 	ImageTag        string            `json:"image_tag" yaml:"image_tag"`
 	DefaultCwd      string            `json:"default_cwd" yaml:"default_cwd"`
 	DefaultEnv      map[string]string `json:"default_env,omitempty" yaml:"default_env,omitempty"`
+	AgentPrompt     string            `json:"agent_prompt,omitempty" yaml:"agent_prompt,omitempty"`
 	Mounts          []Mount           `json:"mounts,omitempty" yaml:"mounts,omitempty"`
 	Resources       ResourceSpec      `json:"resources" yaml:"resources"`
 	Enabled         bool              `json:"enabled" yaml:"enabled"`

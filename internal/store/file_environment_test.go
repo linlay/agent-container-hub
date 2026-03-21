@@ -22,6 +22,7 @@ func TestFileEnvironmentStoreSaveAndGet(t *testing.T) {
 		ImageTag:        "latest",
 		DefaultCwd:      "/workspace",
 		DefaultEnv:      map[string]string{"FOO": "bar"},
+		AgentPrompt:     "Use /workspace for project files.\nCheck bundled tools before installing anything.\n",
 		Enabled:         true,
 		Build: model.BuildSpec{
 			Dockerfile: "FROM busybox:latest\n",
@@ -39,6 +40,9 @@ func TestFileEnvironmentStoreSaveAndGet(t *testing.T) {
 	text := string(payload)
 	if !strings.Contains(text, "image_repository: busybox") {
 		t.Fatalf("file content = %q, want image_repository", text)
+	}
+	if !strings.Contains(text, "agent_prompt:") {
+		t.Fatalf("file content = %q, want agent_prompt", text)
 	}
 	if strings.Contains(text, "dockerfile:") {
 		t.Fatalf("metadata unexpectedly contains dockerfile: %q", text)
@@ -61,6 +65,9 @@ func TestFileEnvironmentStoreSaveAndGet(t *testing.T) {
 	}
 	if stored.Build.Dockerfile != "FROM busybox:latest\n" {
 		t.Fatalf("GetEnvironment().Build.Dockerfile = %q", stored.Build.Dockerfile)
+	}
+	if stored.AgentPrompt != environment.AgentPrompt {
+		t.Fatalf("GetEnvironment().AgentPrompt = %q, want %q", stored.AgentPrompt, environment.AgentPrompt)
 	}
 	if stored.CreatedAt.IsZero() || stored.UpdatedAt.IsZero() {
 		t.Fatalf("mtime-derived timestamps not populated: %+v", stored)

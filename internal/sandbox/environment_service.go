@@ -54,6 +54,7 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		ImageTag:        strings.TrimSpace(req.ImageTag),
 		DefaultCwd:      sessionDefaultCwd("", req.DefaultCwd),
 		DefaultEnv:      util.CloneMap(req.DefaultEnv),
+		AgentPrompt:     req.AgentPrompt,
 		Mounts:          append([]model.Mount(nil), req.Mounts...),
 		Resources:       req.Resources,
 		Enabled:         req.Enabled,
@@ -97,6 +98,27 @@ func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentRespon
 		responses = append(responses, response)
 	}
 	return responses, nil
+}
+
+func (s *EnvironmentService) GetAgentPrompt(ctx context.Context, name string) (*api.EnvironmentAgentPromptResponse, error) {
+	if err := validateEnvironmentName(name); err != nil {
+		return nil, err
+	}
+	environment, err := s.environments.GetEnvironment(ctx, strings.TrimSpace(name))
+	if err != nil {
+		return nil, err
+	}
+	prompt := environment.AgentPrompt
+	hasPrompt := strings.TrimSpace(prompt) != ""
+	if !hasPrompt {
+		prompt = ""
+	}
+	return &api.EnvironmentAgentPromptResponse{
+		EnvironmentName: environment.Name,
+		HasPrompt:       hasPrompt,
+		Prompt:          prompt,
+		UpdatedAt:       environment.UpdatedAt,
+	}, nil
 }
 
 func (s *EnvironmentService) ListFiles(ctx context.Context, name string) ([]*api.EnvironmentFileResponse, error) {
@@ -155,6 +177,7 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		ImageRef:        environment.ImageRef(),
 		DefaultCwd:      environment.DefaultCwd,
 		DefaultEnv:      util.CloneMap(environment.DefaultEnv),
+		AgentPrompt:     environment.AgentPrompt,
 		Mounts:          append([]model.Mount(nil), environment.Mounts...),
 		Resources:       environment.Resources,
 		Enabled:         environment.Enabled,

@@ -7,6 +7,33 @@ default_env:
   DAILY_OFFICE_HOME: /opt/daily-office
   NODE_PATH: /opt/daily-office/node_modules
   PATH: /opt/daily-office/node_modules/.bin:/skills/scripts:/skills/docx/scripts:/skills/pptx/scripts:/skills/pdf/scripts:/skills/xlsx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+agent_prompt: |
+  You are running inside the `daily-office` environment.
+
+  Important environment rules:
+  - Common Node packages are preinstalled under `/opt/daily-office/node_modules`, not as global npm packages.
+  - Do not use `npm list -g <pkg>` as the primary package availability check.
+  - Do not run `npm install -g <pkg>` unless you have already confirmed the package is unavailable through the environment-aware checks below.
+
+  Use these checks first:
+  - `node -p "require.resolve('<pkg>')"`
+  - `node -e "require('<pkg>'); console.log('<pkg> ok')"`
+  - `npm list --prefix /opt/daily-office <pkg>`
+
+  For office tasks, first assume these packages may already be available:
+  - `docx`
+  - `pptxgenjs`
+  - `sharp`
+  - `react`
+  - `react-dom`
+  - `react-icons`
+
+  If a package check fails:
+  1. Verify `NODE_PATH` is set.
+  2. Retry with `require.resolve(...)` or `npm list --prefix /opt/daily-office`.
+  3. Only then explain that the package is truly missing and propose installation.
+
+  Never treat an empty result from `npm list -g` as proof that a package is missing in `daily-office`.
 enabled: true
 default_execute:
   command: /bin/bash

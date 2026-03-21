@@ -449,6 +449,86 @@ func TestEnvironmentAPIRoundTripsDefaultExecute(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAPIRoundTripsAgentPrompt(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	wantPrompt := "You are running inside the shell environment.\nCheck bundled tools before installing anything.\n"
+	saved := doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		AgentPrompt:     wantPrompt,
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	if saved.AgentPrompt != wantPrompt {
+		t.Fatalf("saved.AgentPrompt = %q, want %q", saved.AgentPrompt, wantPrompt)
+	}
+
+	got := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/shell", nil, http.StatusOK, "")
+	if got.AgentPrompt != wantPrompt {
+		t.Fatalf("GET AgentPrompt = %q, want %q", got.AgentPrompt, wantPrompt)
+	}
+
+	promptResp := doJSON[api.EnvironmentAgentPromptResponse](t, handler, http.MethodGet, "/api/environments/shell/agent-prompt", nil, http.StatusOK, "")
+	if !promptResp.HasPrompt {
+		t.Fatal("promptResp.HasPrompt = false, want true")
+	}
+	if promptResp.Prompt != wantPrompt {
+		t.Fatalf("promptResp.Prompt = %q, want %q", promptResp.Prompt, wantPrompt)
+	}
+	if promptResp.EnvironmentName != "shell" {
+		t.Fatalf("promptResp.EnvironmentName = %q, want shell", promptResp.EnvironmentName)
+	}
+	if promptResp.UpdatedAt.IsZero() {
+		t.Fatal("promptResp.UpdatedAt = zero, want non-zero")
+	}
+}
+
+func TestEnvironmentAgentPromptEndpointReturnsEmptyPromptWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	promptResp := doJSON[api.EnvironmentAgentPromptResponse](t, handler, http.MethodGet, "/api/environments/shell/agent-prompt", nil, http.StatusOK, "")
+	if promptResp.HasPrompt {
+		t.Fatal("promptResp.HasPrompt = true, want false")
+	}
+	if promptResp.Prompt != "" {
+		t.Fatalf("promptResp.Prompt = %q, want empty", promptResp.Prompt)
+	}
+}
+
+func TestEnvironmentAgentPromptEndpointReturnsNotFoundForMissingEnvironment(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandlerWithConfig(t, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/environments/missing/agent-prompt", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/environments/{name}/agent-prompt status = %d, want 404", recorder.Code)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("record not found")) {
+		t.Fatalf("GET /api/environments/{name}/agent-prompt body = %q, want not found", recorder.Body.String())
+	}
+}
+
 func TestEnvironmentFileAPIListsGetsAndSavesFiles(t *testing.T) {
 	t.Parallel()
 
@@ -720,6 +800,17 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	}
 	if len(dailyOffice.Build.SmokeArgs) == 0 || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("python -c")) || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("node -e")) {
 		t.Fatalf("daily-office smoke args = %+v, want python/node import checks", dailyOffice.Build.SmokeArgs)
+	}
+	if !strings.Contains(dailyOffice.AgentPrompt, "daily-office") {
+		t.Fatalf("daily-office AgentPrompt = %q, want daily-office guidance", dailyOffice.AgentPrompt)
+	}
+
+	promptResp := doJSON[api.EnvironmentAgentPromptResponse](t, handler, http.MethodGet, "/api/environments/daily-office/agent-prompt", nil, http.StatusOK, "")
+	if !promptResp.HasPrompt {
+		t.Fatal("daily-office prompt HasPrompt = false, want true")
+	}
+	if !strings.Contains(promptResp.Prompt, "npm list -g") {
+		t.Fatalf("daily-office prompt = %q, want npm list -g guidance", promptResp.Prompt)
 	}
 }
 

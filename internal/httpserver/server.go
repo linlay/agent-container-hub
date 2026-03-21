@@ -38,6 +38,7 @@ type SessionService interface {
 type EnvironmentService interface {
 	Upsert(context.Context, api.UpsertEnvironmentRequest) (*api.EnvironmentResponse, error)
 	Get(context.Context, string) (*api.EnvironmentResponse, error)
+	GetAgentPrompt(context.Context, string) (*api.EnvironmentAgentPromptResponse, error)
 	List(context.Context) ([]*api.EnvironmentResponse, error)
 	ListFiles(context.Context, string) ([]*api.EnvironmentFileResponse, error)
 	GetFile(context.Context, string, string) (*api.EnvironmentFileResponse, error)
@@ -108,6 +109,7 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	apiMux.Handle("GET /api/environments", server.requireAuth(http.HandlerFunc(server.handleListEnvironments)))
 	apiMux.Handle("POST /api/environments", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
 	apiMux.Handle("GET /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironment)))
+	apiMux.Handle("GET /api/environments/{name}/agent-prompt", server.requireAuth(http.HandlerFunc(server.handleGetEnvironmentAgentPrompt)))
 	apiMux.Handle("PUT /api/environments/{name}", server.requireAuth(http.HandlerFunc(server.handleUpsertEnvironment)))
 	apiMux.Handle("GET /api/environments/{name}/files", server.requireAuth(http.HandlerFunc(server.handleListEnvironmentFiles)))
 	apiMux.Handle("GET /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironmentFile)))
@@ -406,6 +408,15 @@ func (s *Server) handlePutEnvironmentFile(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleGetEnvironment(w http.ResponseWriter, r *http.Request) {
 	response, err := s.environments.Get(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetEnvironmentAgentPrompt(w http.ResponseWriter, r *http.Request) {
+	response, err := s.environments.GetAgentPrompt(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.writeMappedError(w, err)
 		return

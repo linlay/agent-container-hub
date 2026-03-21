@@ -20,6 +20,7 @@ environment YAML 定义了：
 - `image_repository` / `image_tag`
 - `default_cwd`
 - `default_env`
+- `agent_prompt`
 - `mounts`
 - `resources`
 - `build.dockerfile`
@@ -298,6 +299,7 @@ curl -X POST http://127.0.0.1:11960/api/sessions/demo-shell/stop
 - `PUT /api/environments/{name}`
 - `GET /api/environments`
 - `GET /api/environments/{name}`
+- `GET /api/environments/{name}/agent-prompt`
 - `POST /api/environments/{name}/build`
 
 注册 environment 示例：
@@ -332,6 +334,29 @@ curl -X POST http://127.0.0.1:11960/api/environments/shell/build
 
 宿主机仍需要具备容器引擎权限，以及访问基础镜像、apt/pip/npm 源和 Himalaya 下载源的能力。
 
+调用侧如果要给智能体注入环境专属提示词，可以先读取：
+
+```bash
+curl http://127.0.0.1:11960/api/environments/daily-office/agent-prompt
+```
+
+示例响应：
+
+```json
+{
+  "environment_name": "daily-office",
+  "has_prompt": true,
+  "prompt": "You are running inside the `daily-office` environment.\n...",
+  "updated_at": "2026-03-20T12:00:00Z"
+}
+```
+
+推荐注入流程：
+
+1. 先 `GET /api/environments/daily-office/agent-prompt`
+2. 若 `has_prompt=true`，将 `prompt` 拼到智能体系统提示
+3. 再创建或使用该 environment 对应的 session
+
 ### Environment YAML
 
 environment 主数据不再保存在 `agent-container-hub.db` 中，而是以 YAML 文件形式维护在：
@@ -348,6 +373,9 @@ description: Basic shell environment managed from configs/.
 image_repository: busybox
 image_tag: latest
 default_cwd: /workspace
+agent_prompt: |
+  You are running inside the shell environment.
+  Prefer checking existing tools before installing new ones.
 enabled: true
 build:
   dockerfile: |
@@ -375,6 +403,7 @@ build:
 
 - API 的 `POST/PUT /api/environments*` 会直接写入或覆盖对应 YAML 文件
 - 手工修改 YAML 后无需重启，后续读取会直接生效
+- `agent_prompt` 可由调用侧在创建 session 前读取并注入到智能体提示词中
 - `daily-office` 默认会把宿主机 `/Users/linlay/Project/all-skills` 只读挂载到容器内 `/skills`
 - `GET /api/environments` 遇到坏 YAML 会返回错误并带上文件名
 - `GET /api/environments/{name}`、创建 session、触发 build 只读取目标文件，不受无关坏文件影响

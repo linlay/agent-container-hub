@@ -102,6 +102,7 @@ type UpsertEnvironmentRequest struct {
 	ImageTag        string              `json:"image_tag"`
 	DefaultCwd      string              `json:"default_cwd"`
 	DefaultEnv      map[string]string   `json:"default_env"`
+	AgentPrompt     string              `json:"agent_prompt"`
 	Mounts          []model.Mount       `json:"mounts"`
 	Resources       model.ResourceSpec  `json:"resources"`
 	Enabled         bool                `json:"enabled"`
@@ -117,6 +118,7 @@ type EnvironmentResponse struct {
 	ImageRef        string              `json:"image_ref"`
 	DefaultCwd      string              `json:"default_cwd"`
 	DefaultEnv      map[string]string   `json:"default_env,omitempty"`
+	AgentPrompt     string              `json:"agent_prompt,omitempty"`
 	Mounts          []model.Mount       `json:"mounts,omitempty"`
 	Resources       model.ResourceSpec  `json:"resources"`
 	Enabled         bool                `json:"enabled"`
@@ -126,6 +128,13 @@ type EnvironmentResponse struct {
 	UpdatedAt       time.Time           `json:"updated_at"`
 	LastBuild       *BuildJobResponse   `json:"last_build,omitempty"`
 	YAML            string              `json:"yaml,omitempty"`
+}
+
+type EnvironmentAgentPromptResponse struct {
+	EnvironmentName string    `json:"environment_name"`
+	HasPrompt       bool      `json:"has_prompt"`
+	Prompt          string    `json:"prompt"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type EnvironmentFileResponse struct {

@@ -7,6 +7,7 @@ const state = {
     selectedBuild: defaultBuild(),
     selectedDetails: defaultEnvironmentDetails(),
     selectedDefaultExecute: defaultExecutePreset(),
+    selectedAgentPrompt: "",
   },
   files: {
     items: [],
@@ -40,6 +41,7 @@ function clearEnvironmentForm() {
   state.environments.selectedBuild = defaultBuild();
   state.environments.selectedDetails = defaultEnvironmentDetails();
   state.environments.selectedDefaultExecute = defaultExecutePreset();
+  state.environments.selectedAgentPrompt = "";
   state.files.items = [];
   state.files.selectedPath = "";
   state.files.selectedContent = "";
@@ -213,6 +215,7 @@ async function selectEnvironment(name) {
   state.environments.selectedBuild = normalizeBuild(item.build);
   state.environments.selectedDetails = normalizeEnvironmentDetails(item);
   state.environments.selectedDefaultExecute = normalizeExecutePreset(item.default_execute);
+  state.environments.selectedAgentPrompt = item.agent_prompt || "";
   document.getElementById("default-execute-command").value = state.environments.selectedDefaultExecute.command || "";
   document.getElementById("default-execute-cwd").value = state.environments.selectedDefaultExecute.cwd || "";
   document.getElementById("default-execute-timeout").value = state.environments.selectedDefaultExecute.timeout_ms || "";
@@ -246,6 +249,7 @@ function collectEnvironmentPayload() {
     default_cwd: document.getElementById("cwd").value.trim(),
     description: document.getElementById("description").value.trim(),
     default_env: { ...state.environments.selectedDetails.default_env },
+    agent_prompt: state.environments.selectedAgentPrompt,
     mounts: state.environments.selectedDetails.mounts.map((mount) => ({ ...mount })),
     resources: { ...state.environments.selectedDetails.resources },
     enabled: state.environments.selectedDetails.enabled,
@@ -277,6 +281,7 @@ async function initialize() {
       state.environments.selectedBuild = normalizeBuild(result.build);
       state.environments.selectedDetails = normalizeEnvironmentDetails(result);
       state.environments.selectedDefaultExecute = normalizeExecutePreset(result.default_execute);
+      state.environments.selectedAgentPrompt = result.agent_prompt || "";
       environmentOutput.textContent = "Environment saved.";
       environmentYAML.textContent = result.yaml || "No YAML available.";
       showToast(`Environment ${result.name} saved.`, "success");

@@ -241,6 +241,82 @@ func TestDurationMilliseconds(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAgentPromptRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	wantPrompt := "You are running inside the shell environment.\nUse existing tools before installing anything.\n"
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		AgentPrompt:     wantPrompt,
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	got, err := services.environments.GetAgentPrompt(context.Background(), "shell")
+	if err != nil {
+		t.Fatalf("GetAgentPrompt() error = %v", err)
+	}
+	if !got.HasPrompt {
+		t.Fatal("GetAgentPrompt().HasPrompt = false, want true")
+	}
+	if got.Prompt != wantPrompt {
+		t.Fatalf("GetAgentPrompt().Prompt = %q, want %q", got.Prompt, wantPrompt)
+	}
+	if got.EnvironmentName != "shell" {
+		t.Fatalf("GetAgentPrompt().EnvironmentName = %q, want shell", got.EnvironmentName)
+	}
+	if got.UpdatedAt.IsZero() {
+		t.Fatal("GetAgentPrompt().UpdatedAt = zero, want non-zero")
+	}
+
+	environment, err := services.environments.Get(context.Background(), "shell")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if environment.AgentPrompt != wantPrompt {
+		t.Fatalf("Get().AgentPrompt = %q, want %q", environment.AgentPrompt, wantPrompt)
+	}
+}
+
+func TestEnvironmentAgentPromptReturnsEmptyWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, _ := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	got, err := services.environments.GetAgentPrompt(context.Background(), "shell")
+	if err != nil {
+		t.Fatalf("GetAgentPrompt() error = %v", err)
+	}
+	if got.HasPrompt {
+		t.Fatal("GetAgentPrompt().HasPrompt = true, want false")
+	}
+	if got.Prompt != "" {
+		t.Fatalf("GetAgentPrompt().Prompt = %q, want empty", got.Prompt)
+	}
+}
+
 func TestCreateRejectsDisabledEnvironment(t *testing.T) {
 	t.Parallel()
 
