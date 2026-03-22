@@ -1,22 +1,11 @@
 IMAGE_NAME ?= daily-office
 TAG ?= latest
-CN_TAG ?= cn
-HIMALAYA_DOWNLOAD_URL ?=
-CN_HIMALAYA_DOWNLOAD_URL ?= $(HIMALAYA_DOWNLOAD_URL)
-CN_PYTHON_BASE_IMAGE ?= docker.m.daocloud.io/python:3.12-slim-bookworm
+HIMALAYA_DOWNLOAD_URL ?= https://cligrep.com/cli-releases/himalaya.aarch64-linux.tgz
 
-.PHONY: build build-cn check-cn-himalaya-url
+.PHONY: build build-cn
 
 # Usage:
-#   make build-cn CN_HIMALAYA_DOWNLOAD_URL=https://<mirror>/himalaya-archive.tar.gz
-# Override CN_PYTHON_BASE_IMAGE if you need a different mainland-accessible mirror.
-
-check-cn-himalaya-url:
-	@if [ -z "$(strip $(CN_HIMALAYA_DOWNLOAD_URL))" ]; then \
-		echo "build-cn requires CN_HIMALAYA_DOWNLOAD_URL (or HIMALAYA_DOWNLOAD_URL) because the Dockerfile otherwise downloads Himalaya from GitHub Release."; \
-		echo "Example: make build-cn CN_HIMALAYA_DOWNLOAD_URL=https://<mirror>/himalaya-v1.2.0-x86_64-unknown-linux-gnu.tar.gz"; \
-		exit 1; \
-	fi
+#   make build-cn  # builds the CN-friendly variant of daily-office:latest
 
 build:
 	docker build \
@@ -24,14 +13,14 @@ build:
 		-f Dockerfile \
 		.
 
-build-cn: check-cn-himalaya-url
+build-cn:
 	docker build \
-		--tag $(IMAGE_NAME):$(CN_TAG) \
-		--build-arg PYTHON_BASE_IMAGE=$(CN_PYTHON_BASE_IMAGE) \
+		--tag $(IMAGE_NAME):$(TAG) \
+		--build-arg PYTHON_BASE_IMAGE=docker.1ms.run/library/python:3.12-slim-bookworm \
 		--build-arg APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian \
 		--build-arg APT_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security \
 		--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
 		--build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-		--build-arg HIMALAYA_DOWNLOAD_URL=$(CN_HIMALAYA_DOWNLOAD_URL) \
+		--build-arg HIMALAYA_DOWNLOAD_URL=$(HIMALAYA_DOWNLOAD_URL) \
 		-f Dockerfile \
 		.
