@@ -509,7 +509,6 @@ make docker-build
 ```text
 agent-container-hub/
   agent-container-hub
-  VERSION
   .env.example
   start.sh
   stop.sh

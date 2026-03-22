@@ -18,7 +18,6 @@ require_file() {
 
 ensure_bundle_root() {
   require_file "./$APP_NAME"
-  require_file "./VERSION"
   require_file "./.env.example"
   require_file "./configs/environments"
 }

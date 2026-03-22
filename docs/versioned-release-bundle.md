@@ -109,7 +109,6 @@ CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
 脚本会组装出一个标准目录 `agent-container-hub/`，其中包含：
 
 - `agent-container-hub`
-- `VERSION`
 - `.env.example`
 - `start.sh`
 - `stop.sh`
@@ -151,7 +150,6 @@ dist/release/agent-container-hub-vX.Y.Z-linux-<arch>.tar.gz
 ```text
 agent-container-hub/
   agent-container-hub
-  VERSION
   .env.example
   start.sh
   stop.sh
