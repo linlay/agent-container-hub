@@ -4,7 +4,7 @@
 它同时提供：
 
 - 会话管理：创建、执行、停止、查询长生命周期 sandbox session
-- 环境注册：通过 `configs/environments/*.yaml` 维护可被会话引用的命名环境模板
+- 环境注册：通过 `configs/environments/<name>/environment.yml` 维护可被会话引用的命名环境模板
 - 镜像构建：基于环境中保存的 Dockerfile 触发本地构建与 smoke check
 - 内置管理站：同一个 Go 进程同时托管 API 和轻量 Web UI
 
@@ -90,6 +90,40 @@ make build
 make test
 ```
 
+### 版本化打包
+
+正式版本号由根目录 `VERSION` 单一管理，格式固定为 `vX.Y.Z`。
+
+构建当前架构的 Linux release bundle：
+
+```bash
+make release
+```
+
+或显式指定版本与架构：
+
+```bash
+make release VERSION=v0.1.0 ARCH=arm64
+make release VERSION=v0.1.0 ARCH=amd64
+```
+
+产物输出到：
+
+```text
+dist/release/agent-container-hub-vX.Y.Z-linux-<arch>.tar.gz
+```
+
+bundle 解压后包含：
+
+- `agent-container-hub` Linux 二进制
+- `.env.example`
+- `start.sh` / `stop.sh`
+- `systemd/agent-container-hub.service`
+- `configs/environments/` live config
+- `data/rootfs/` 与 `data/builds/` 空目录
+
+更完整的发布设计见 [docs/versioned-release-bundle.md](./docs/versioned-release-bundle.md)。
+
 ## 配置
 
 项目只使用环境变量配置。
@@ -107,7 +141,7 @@ make test
   - SQLite 运行态数据库路径，保存 `sessions`、`build_jobs`、`session_executions`
 - `CONFIG_ROOT`
   - 默认值：`./configs`
-  - environment / image YAML 配置根目录，实际环境文件位于 `configs/environments/*.yaml`
+  - environment / image YAML 配置根目录，实际环境文件位于 `configs/environments/<name>/environment.yml`
 - `ROOTFS_ROOT`
   - 默认值：`./data/rootfs`
   - session rootfs 根目录
@@ -437,7 +471,17 @@ build:
 
 ## 部署建议
 
-推荐直接部署为宿主机进程：
+推荐通过 release bundle 部署为宿主机进程：
+
+```bash
+make release VERSION=v0.1.0
+tar -xzf dist/release/agent-container-hub-v0.1.0-linux-<arch>.tar.gz
+cd agent-container-hub
+cp .env.example .env
+./start.sh
+```
+
+开发态也可以直接在源码目录运行：
 
 ```bash
 make build
@@ -447,9 +491,10 @@ make build
 生产环境建议：
 
 - 将 `STATE_DB_PATH`、`CONFIG_ROOT`、`ROOTFS_ROOT`、`BUILD_ROOT` 指向持久化磁盘
-- 使用 systemd、supervisor 或类似工具托管进程
+- 优先使用 bundle 内 `systemd/agent-container-hub.service` 模板托管进程
 - 对外监听时务必设置 `AUTH_TOKEN`
 - 预先确认宿主机容器引擎权限、镜像仓库登录状态和 socket 可用性
+- `configs/environments/` 是唯一真相来源；若升级 bundle 前本地改过环境配置，请先备份或合并
 
 容器镜像可通过以下命令构建：
 
@@ -458,6 +503,34 @@ make docker-build
 ```
 
 但容器化运行不是默认方式；若在容器中运行本服务，需要额外挂载宿主机容器引擎 socket 并处理权限问题。
+
+### Release Bundle 目录结构
+
+```text
+agent-container-hub/
+  agent-container-hub
+  VERSION
+  .env.example
+  start.sh
+  stop.sh
+  README.txt
+  systemd/
+    agent-container-hub.service
+  configs/
+    environments/
+      shell/
+      daily-office/
+  data/
+    rootfs/
+    builds/
+```
+
+其中：
+
+- `start.sh` 默认前台运行，`./start.sh --daemon` 可切到后台
+- `stop.sh` 只负责停止 `--daemon` 模式启动的本地进程
+- systemd 模板里的 `/opt/agent-container-hub` 只是示例路径，部署时需要替换成真实安装目录
+- 这个项目虽然是非容器化部署，但运行期仍依赖宿主机 `docker` 或 `podman`
 
 ## 常见排查
 

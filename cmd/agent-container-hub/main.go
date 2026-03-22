@@ -18,6 +18,8 @@ import (
 	"agent-container-hub/internal/store"
 )
 
+var buildVersion = "dev"
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -82,8 +84,9 @@ func main() {
 	logger.Info("http logging configured",
 		"api_access_log_enabled", cfg.HTTPAccessLogEnabled,
 		"api_error_log_enabled", cfg.HTTPErrorLogEnabled,
+		"version", buildVersion,
 	)
-	logger.Info("sandbox daemon listening", "addr", cfg.BindAddr, "engine", provider.Name())
+	logger.Info("sandbox daemon listening", "addr", cfg.BindAddr, "engine", provider.Name(), "version", buildVersion)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)

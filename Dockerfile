@@ -1,12 +1,14 @@
 FROM golang:1.26-alpine AS builder
 
+ARG VERSION=dev
+
 WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/agent-container-hub ./cmd/agent-container-hub
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.buildVersion=${VERSION}" -o /out/agent-container-hub ./cmd/agent-container-hub
 
 FROM alpine:3.22
 
