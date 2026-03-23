@@ -360,6 +360,17 @@ curl -X POST http://127.0.0.1:11960/api/environments \
 curl -X POST http://127.0.0.1:11960/api/environments/shell/build
 ```
 
+如果需要直接在环境目录里本地构建镜像，也可以使用各自的 `Makefile`：
+
+```bash
+cd configs/environments/daily-office && make build-cn
+cd configs/environments/shell && make build
+cd configs/environments/shell && make build-cn
+```
+
+- `daily-office build-cn` 主要优化 apt/pip/npm 等包管理源
+- `shell build-cn` 主要优化基础镜像拉取源，必要时可覆盖 `CN_BASE_IMAGE=...`
+
 内置 `daily-office` 直接通过 environment YAML 中的内联 Dockerfile 构建镜像，运行时则依赖只读 `/skills` 挂载：
 
 ```text
