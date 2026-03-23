@@ -85,13 +85,9 @@ type Provider interface {
 	Create(context.Context, CreateOptions) (ContainerInfo, error)
 	Start(context.Context, string) (ContainerInfo, error)
 	Exec(context.Context, string, ExecOptions) (ExecResult, error)
+	Build(context.Context, BuildOptions) (BuildResult, error)
 	Stop(context.Context, string, time.Duration) error
 	Remove(context.Context, string) error
 	Inspect(context.Context, string) (ContainerInfo, error)
 	ListByLabel(context.Context, string, string) ([]ContainerInfo, error)
-}
-
-type Builder interface {
-	Name() string
-	Build(context.Context, BuildOptions) (BuildResult, error)
 }

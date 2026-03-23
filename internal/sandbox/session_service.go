@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"agent-container-hub/internal/api"
@@ -17,7 +16,6 @@ import (
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/runtime"
 	"agent-container-hub/internal/store"
-	"agent-container-hub/internal/util"
 )
 
 var (
@@ -28,15 +26,14 @@ var (
 
 type SessionService struct {
 	cfg     config.Config
-	store   store.RuntimeStore
+	store   store.AppStore
 	envs    store.EnvironmentStore
 	runtime runtime.Provider
 	logger  *slog.Logger
-	lockMu  sync.Mutex
-	locks   map[string]struct{}
+	locks   *namedLock
 }
 
-func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
+func NewSessionService(cfg config.Config, st store.AppStore, envs store.EnvironmentStore, provider runtime.Provider, logger *slog.Logger) *SessionService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -46,7 +43,7 @@ func NewSessionService(cfg config.Config, st store.RuntimeStore, envs store.Envi
 		envs:    envs,
 		runtime: provider,
 		logger:  logger,
-		locks:   make(map[string]struct{}),
+		locks:   newNamedLock(),
 	}
 }
 
@@ -67,7 +64,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 	if !environment.Enabled {
 		return nil, fmt.Errorf("%w: environment is disabled", ErrValidation)
 	}
-	if err := util.ValidateEnvMap(environment.DefaultEnv, "default_env"); err != nil {
+	if err := model.ValidateEnvMap(environment.DefaultEnv, "default_env"); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
 	}
 
@@ -83,7 +80,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		return nil, err
 	}
 
-	release, acquired := s.tryLock(sessionID)
+	release, acquired := s.locks.tryLock(sessionID)
 	if !acquired {
 		return nil, ErrBusy
 	}
@@ -112,7 +109,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		rootfsPath = ""
 	}
 
-	containerLabels := util.CloneMap(req.Labels)
+	containerLabels := model.CloneMap(req.Labels)
 	if containerLabels == nil {
 		containerLabels = make(map[string]string)
 	}
@@ -129,7 +126,7 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		Name:      sessionID,
 		Image:     environment.ImageRef(),
 		Cwd:       cwd,
-		Env:       util.CloneMap(environment.DefaultEnv),
+		Env:       model.CloneMap(environment.DefaultEnv),
 		Mounts:    mounts,
 		Resources: environment.Resources,
 		Labels:    containerLabels,
@@ -169,10 +166,10 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 		Image:           environment.ImageRef(),
 		DefaultCwd:      cwd,
 		RootfsPath:      rootfsPath,
-		Env:             util.CloneMap(environment.DefaultEnv),
+		Env:             model.CloneMap(environment.DefaultEnv),
 		Mounts:          append([]model.Mount(nil), mounts...),
 		Resources:       environment.Resources,
-		Labels:          util.CloneMap(req.Labels),
+		Labels:          model.CloneMap(req.Labels),
 		Status:          model.SessionStatusActive,
 		CreatedAt:       time.Now().UTC(),
 	}
@@ -230,7 +227,7 @@ func (s *SessionService) Execute(ctx context.Context, sessionID string, req api.
 	if strings.TrimSpace(req.Command) == "" {
 		return nil, fmt.Errorf("%w: command is required", ErrValidation)
 	}
-	release, acquired := s.tryLock(sessionID)
+	release, acquired := s.locks.tryLock(sessionID)
 	if !acquired {
 		return nil, ErrBusy
 	}
@@ -303,7 +300,7 @@ func (s *SessionService) Stop(ctx context.Context, sessionID string) (*api.StopS
 		return nil, fmt.Errorf("%w: session_id is required", ErrValidation)
 	}
 
-	release, acquired := s.tryLock(sessionID)
+	release, acquired := s.locks.tryLock(sessionID)
 	if !acquired {
 		return nil, ErrBusy
 	}
@@ -493,24 +490,6 @@ func (s *SessionService) inspectSession(ctx context.Context, session *model.Sess
 		return runtime.ContainerInfo{}, err
 	}
 	return s.runtime.Inspect(ctx, session.ContainerID)
-}
-
-func (s *SessionService) tryLock(id string) (func(), bool) {
-	s.lockMu.Lock()
-	defer s.lockMu.Unlock()
-	if _, exists := s.locks[id]; exists {
-		return nil, false
-	}
-	s.locks[id] = struct{}{}
-	return func() {
-		s.releaseLock(id)
-	}, true
-}
-
-func (s *SessionService) releaseLock(id string) {
-	s.lockMu.Lock()
-	delete(s.locks, id)
-	s.lockMu.Unlock()
 }
 
 func (s *SessionService) markSessionUnavailable(ctx context.Context, session *model.Session, stoppedAt time.Time) error {

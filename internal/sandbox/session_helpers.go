@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/runtime"
-	"agent-container-hub/internal/util"
 )
 
 var validSessionID = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
@@ -37,6 +37,14 @@ func sessionDefaultCwd(requestCwd, environmentCwd string) string {
 func validateSessionID(sessionID string) error {
 	if !validSessionID.MatchString(strings.TrimSpace(sessionID)) {
 		return fmt.Errorf("%w: session_id must match %s", ErrValidation, validSessionID.String())
+	}
+	return nil
+}
+
+func validateEnvironmentName(name string) error {
+	name = strings.TrimSpace(name)
+	if !model.ValidEnvironmentName.MatchString(name) {
+		return fmt.Errorf("%w: environment name must match %s", ErrValidation, model.ValidEnvironmentName.String())
 	}
 	return nil
 }
@@ -110,7 +118,7 @@ func sessionToResponse(session *model.Session) *api.SessionResponse {
 		Image:           session.Image,
 		DefaultCwd:      session.DefaultCwd,
 		RootfsPath:      session.RootfsPath,
-		Labels:          util.CloneMap(session.Labels),
+		Labels:          model.CloneMap(session.Labels),
 		Resources:       session.Resources,
 		Mounts:          append([]model.Mount(nil), session.Mounts...),
 		CreatedAt:       session.CreatedAt,
@@ -125,4 +133,33 @@ func durationMilliseconds(startedAt, finishedAt time.Time) int64 {
 		return 0
 	}
 	return durationMS
+}
+
+type namedLock struct {
+	mu    sync.Mutex
+	locks map[string]struct{}
+}
+
+func newNamedLock() *namedLock {
+	return &namedLock{locks: make(map[string]struct{})}
+}
+
+func (l *namedLock) tryLock(name string) (func(), bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, exists := l.locks[name]; exists {
+		return nil, false
+	}
+	l.locks[name] = struct{}{}
+	return func() {
+		l.mu.Lock()
+		delete(l.locks, name)
+		l.mu.Unlock()
+	}, true
+}
+
+func (l *namedLock) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.locks)
 }

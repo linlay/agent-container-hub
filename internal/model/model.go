@@ -1,14 +1,15 @@
 package model
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
-
-	"agent-container-hub/internal/util"
+	"unicode"
 )
 
 var ValidEnvironmentName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type Mount struct {
 	Source      string `json:"source" yaml:"source"`
@@ -59,7 +60,7 @@ func (e *Environment) Clone() *Environment {
 		return nil
 	}
 	cp := *e
-	cp.DefaultEnv = util.CloneMap(e.DefaultEnv)
+	cp.DefaultEnv = CloneMap(e.DefaultEnv)
 	cp.Mounts = append([]Mount(nil), e.Mounts...)
 	cp.DefaultExecute = e.DefaultExecute.Clone()
 	cp.Build = e.Build.Clone()
@@ -83,7 +84,7 @@ func (e *Environment) ImageRef() string {
 
 func (b BuildSpec) Clone() BuildSpec {
 	cp := b
-	cp.BuildArgs = util.CloneMap(b.BuildArgs)
+	cp.BuildArgs = CloneMap(b.BuildArgs)
 	cp.SmokeArgs = append([]string(nil), b.SmokeArgs...)
 	return cp
 }
@@ -148,8 +149,8 @@ func (s *Session) Clone() *Session {
 		return nil
 	}
 	cp := *s
-	cp.Env = util.CloneMap(s.Env)
-	cp.Labels = util.CloneMap(s.Labels)
+	cp.Env = CloneMap(s.Env)
+	cp.Labels = CloneMap(s.Labels)
 	cp.Mounts = append([]Mount(nil), s.Mounts...)
 	return &cp
 }
@@ -179,4 +180,36 @@ func (e *SessionExecution) Clone() *SessionExecution {
 	cp := *e
 	cp.Args = append([]string(nil), e.Args...)
 	return &cp
+}
+
+func CloneMap[V any](src map[string]V) map[string]V {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]V, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func ValidateEnvMap(values map[string]string, kind string) error {
+	for key, value := range values {
+		if !envKeyPattern.MatchString(key) {
+			return fmt.Errorf("%s key %q must match %s", kind, key, envKeyPattern.String())
+		}
+		if containsControlChars(value) {
+			return fmt.Errorf("%s value for %q contains control characters", kind, key)
+		}
+	}
+	return nil
+}
+
+func containsControlChars(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }

@@ -9,7 +9,6 @@ import (
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/model"
 	"agent-container-hub/internal/store"
-	"agent-container-hub/internal/util"
 )
 
 type EnvironmentService struct {
@@ -40,10 +39,10 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 	if strings.TrimSpace(req.ImageTag) == "" {
 		return nil, fmt.Errorf("%w: image_tag is required", ErrValidation)
 	}
-	if err := util.ValidateEnvMap(req.DefaultEnv, "default_env"); err != nil {
+	if err := model.ValidateEnvMap(req.DefaultEnv, "default_env"); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
 	}
-	if err := util.ValidateEnvMap(req.Build.BuildArgs, "build.build_args"); err != nil {
+	if err := model.ValidateEnvMap(req.Build.BuildArgs, "build.build_args"); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
 	}
 
@@ -53,7 +52,7 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		ImageRepository: strings.TrimSpace(req.ImageRepository),
 		ImageTag:        strings.TrimSpace(req.ImageTag),
 		DefaultCwd:      sessionDefaultCwd("", req.DefaultCwd),
-		DefaultEnv:      util.CloneMap(req.DefaultEnv),
+		DefaultEnv:      model.CloneMap(req.DefaultEnv),
 		AgentPrompt:     req.AgentPrompt,
 		Mounts:          append([]model.Mount(nil), req.Mounts...),
 		Resources:       req.Resources,
@@ -176,7 +175,7 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		ImageTag:        environment.ImageTag,
 		ImageRef:        environment.ImageRef(),
 		DefaultCwd:      environment.DefaultCwd,
-		DefaultEnv:      util.CloneMap(environment.DefaultEnv),
+		DefaultEnv:      model.CloneMap(environment.DefaultEnv),
 		AgentPrompt:     environment.AgentPrompt,
 		Mounts:          append([]model.Mount(nil), environment.Mounts...),
 		Resources:       environment.Resources,

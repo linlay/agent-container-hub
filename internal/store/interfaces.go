@@ -28,7 +28,7 @@ type BuildJobStore interface {
 	ListBuildJobs(context.Context, string) ([]*model.BuildJob, error)
 }
 
-type RuntimeStore interface {
+type AppStore interface {
 	SessionStore
 	SessionExecutionStore
 	BuildJobStore

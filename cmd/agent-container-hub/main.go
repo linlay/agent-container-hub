@@ -40,23 +40,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("load runtime provider: %v", err)
 	}
-	builder, ok := provider.(runtime.Builder)
-	if !ok {
-		log.Fatalf("runtime provider %T does not support image builds", provider)
-	}
-	runtimeStore, err := store.Open(cfg.StateDBPath)
+	appStore, err := store.Open(cfg.StateDBPath)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
-	defer runtimeStore.Close()
+	defer appStore.Close()
 	environmentStore, err := store.OpenFileEnvironmentStore(filepath.Join(cfg.ConfigRoot, "environments"))
 	if err != nil {
 		log.Fatalf("open environment store: %v", err)
 	}
 
-	sessionService := sandbox.NewSessionService(cfg, runtimeStore, environmentStore, provider, logger)
-	environmentService := sandbox.NewEnvironmentService(environmentStore, runtimeStore, logger)
-	buildService := sandbox.NewBuildService(cfg, runtimeStore, environmentStore, builder, provider, logger)
+	sessionService := sandbox.NewSessionService(cfg, appStore, environmentStore, provider, logger)
+	environmentService := sandbox.NewEnvironmentService(environmentStore, appStore, logger)
+	buildService := sandbox.NewBuildService(cfg, appStore, environmentStore, provider, logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

@@ -21,7 +21,6 @@ import (
 	"agent-container-hub/internal/runtime"
 	"agent-container-hub/internal/sandbox"
 	"agent-container-hub/internal/store"
-	"agent-container-hub/internal/util"
 )
 
 func TestSessionEnvironmentAndUIEndpoints(t *testing.T) {
@@ -954,7 +953,7 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 	serviceLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, serviceLogger)
 	environmentService := sandbox.NewEnvironmentService(envs, st, serviceLogger)
-	buildService := sandbox.NewBuildService(cfg, st, envs, fake, fake, serviceLogger)
+	buildService := sandbox.NewBuildService(cfg, st, envs, fake, serviceLogger)
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -984,7 +983,7 @@ func (f *httpFakeRuntime) Create(_ context.Context, opts runtime.CreateOptions) 
 		Name:      opts.Name,
 		Image:     opts.Image,
 		State:     runtime.ContainerStopped,
-		Labels:    util.CloneMap(opts.Labels),
+		Labels:    model.CloneMap(opts.Labels),
 		CreatedAt: time.Now().UTC(),
 	}
 	f.containers[id] = info

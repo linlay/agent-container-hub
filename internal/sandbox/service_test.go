@@ -1452,15 +1452,15 @@ func TestStopCleansUpSessionLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if len(services.sessions.locks) != 0 {
-		t.Fatalf("locks len after create = %d, want 0", len(services.sessions.locks))
+	if services.sessions.locks.count() != 0 {
+		t.Fatalf("locks len after create = %d, want 0", services.sessions.locks.count())
 	}
 
 	if _, err := services.sessions.Stop(context.Background(), created.SessionID); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	if len(services.sessions.locks) != 0 {
-		t.Fatalf("locks len after stop = %d, want 0", len(services.sessions.locks))
+	if services.sessions.locks.count() != 0 {
+		t.Fatalf("locks len after stop = %d, want 0", services.sessions.locks.count())
 	}
 }
 
@@ -1497,8 +1497,8 @@ func TestReconcileCleansUpSessionLock(t *testing.T) {
 	if err := services.sessions.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	if len(services.sessions.locks) != 0 {
-		t.Fatalf("locks len after reconcile = %d, want 0", len(services.sessions.locks))
+	if services.sessions.locks.count() != 0 {
+		t.Fatalf("locks len after reconcile = %d, want 0", services.sessions.locks.count())
 	}
 
 	stored, err := services.sessions.Get(context.Background(), created.SessionID)
@@ -1516,20 +1516,20 @@ func TestTryLockEnforcesExclusivityAndReleaseClearsEntry(t *testing.T) {
 	services, cleanup, _ := newTestServices(t)
 	defer cleanup()
 
-	release, acquired := services.sessions.tryLock("held-lock")
+	release, acquired := services.sessions.locks.tryLock("held-lock")
 	if !acquired {
 		t.Fatal("tryLock() acquired = false, want true")
 	}
 
-	secondRelease, secondAcquired := services.sessions.tryLock("held-lock")
+	secondRelease, secondAcquired := services.sessions.locks.tryLock("held-lock")
 	if secondAcquired {
 		secondRelease()
 		t.Fatal("tryLock() acquired a second lock after cleanup scheduling, want held lock to remain exclusive")
 	}
 
 	release()
-	if len(services.sessions.locks) != 0 {
-		t.Fatalf("locks len after release = %d, want 0", len(services.sessions.locks))
+	if services.sessions.locks.count() != 0 {
+		t.Fatalf("locks len after release = %d, want 0", services.sessions.locks.count())
 	}
 }
 
@@ -1622,7 +1622,7 @@ func TestBuildEnvironmentRejectsConcurrentBuildsForSameEnvironment(t *testing.T)
 }
 
 type testServices struct {
-	store        store.RuntimeStore
+	store        store.AppStore
 	envs         store.EnvironmentStore
 	sessions     *SessionService
 	environments *EnvironmentService
@@ -1683,7 +1683,7 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 		envs:         envs,
 		sessions:     NewSessionService(cfg, st, envs, fake, logger),
 		environments: NewEnvironmentService(envs, st, logger),
-		builds:       NewBuildService(cfg, st, envs, fake, fake, logger),
+		builds:       NewBuildService(cfg, st, envs, fake, logger),
 	}, func() { _ = st.Close() }, fake
 }
 

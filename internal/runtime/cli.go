@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"agent-container-hub/internal/util"
+	"agent-container-hub/internal/model"
 )
 
 type CLIProvider struct {
@@ -45,7 +45,7 @@ func (p *CLIProvider) Name() string {
 }
 
 func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (ContainerInfo, error) {
-	if err := util.ValidateEnvMap(opts.Env, "environment variable"); err != nil {
+	if err := model.ValidateEnvMap(opts.Env, "environment variable"); err != nil {
 		return ContainerInfo{}, err
 	}
 	args := []string{"create", "--name", opts.Name}
@@ -89,7 +89,7 @@ func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (Container
 		Name:      opts.Name,
 		Image:     opts.Image,
 		State:     ContainerStopped,
-		Labels:    util.CloneMap(opts.Labels),
+		Labels:    model.CloneMap(opts.Labels),
 		CreatedAt: time.Now().UTC(),
 	}, nil
 }
@@ -110,7 +110,7 @@ func (p *CLIProvider) Start(ctx context.Context, containerID string) (ContainerI
 }
 
 func (p *CLIProvider) Exec(ctx context.Context, containerID string, opts ExecOptions) (ExecResult, error) {
-	if err := util.ValidateEnvMap(map[string]string{"COMMAND": opts.Command}, "exec command"); err != nil {
+	if err := model.ValidateEnvMap(map[string]string{"COMMAND": opts.Command}, "exec command"); err != nil {
 		return ExecResult{}, fmt.Errorf("invalid exec command: %w", err)
 	}
 	resolvedID, err := p.resolveContainerReference(ctx, containerID)
@@ -181,7 +181,7 @@ func (p *CLIProvider) Build(ctx context.Context, opts BuildOptions) (BuildResult
 	if strings.TrimSpace(opts.DockerfilePath) != "" {
 		args = append(args, "-f", opts.DockerfilePath)
 	}
-	if err := util.ValidateEnvMap(opts.BuildArgs, "build argument"); err != nil {
+	if err := model.ValidateEnvMap(opts.BuildArgs, "build argument"); err != nil {
 		return BuildResult{}, err
 	}
 	for key, value := range opts.BuildArgs {
@@ -359,7 +359,7 @@ func parseInspect(raw string) ([]ContainerInfo, error) {
 			Name:      strings.TrimPrefix(item.Name, "/"),
 			Image:     image,
 			State:     parseContainerState(item.State.Status),
-			Labels:    util.CloneMap(item.Config.Labels),
+			Labels:    model.CloneMap(item.Config.Labels),
 			CreatedAt: createdAt.UTC(),
 		})
 	}
