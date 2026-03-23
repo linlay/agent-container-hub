@@ -12,7 +12,7 @@ import {
 
 const DEFAULT_SESSION_STATUS_FILTER = "history";
 const RESERVED_SESSION_MOUNT_PATH = "/workspace";
-const SESSION_STATUS_FILTER_OPTIONS = ["history", "active", "all"];
+const SESSION_STATUS_FILTER_OPTIONS = ["history", "active"];
 
 const state = {
   sessions: {
@@ -770,12 +770,21 @@ function renderSessionStatusFilterTags() {
   });
 }
 
+async function applySessionFilters() {
+  state.sessions.filters.session_id = document.getElementById("session-filter-id").value.trim();
+  state.sessions.filters.environment_name = document.getElementById("session-filter-environment").value.trim();
+  state.sessions.pageSize = Number(document.getElementById("session-page-size").value) || 20;
+  state.sessions.page = 1;
+  await refreshSessions(false);
+  renderCreateEnvironmentOptions();
+}
+
 async function initialize() {
   initializeShell("sessions");
   bindModalDismiss();
   renderSessionStatusFilterTags();
 
-  document.getElementById("session-filter-status").addEventListener("click", (event) => {
+  document.getElementById("session-filter-status").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-status-filter]");
     if (!button) {
       return;
@@ -788,6 +797,7 @@ async function initialize() {
 
     state.sessions.filters.status = nextStatus;
     renderSessionStatusFilterTags();
+    await applySessionFilters();
   });
 
   createEnvironmentSelect.addEventListener("change", () => {
@@ -842,12 +852,7 @@ async function initialize() {
   });
 
   document.getElementById("apply-session-filter").addEventListener("click", async () => {
-    state.sessions.filters.session_id = document.getElementById("session-filter-id").value.trim();
-    state.sessions.filters.environment_name = document.getElementById("session-filter-environment").value.trim();
-    state.sessions.pageSize = Number(document.getElementById("session-page-size").value) || 20;
-    state.sessions.page = 1;
-    await refreshSessions(false);
-    renderCreateEnvironmentOptions();
+    await applySessionFilters();
   });
 
   document.getElementById("reset-session-filter").addEventListener("click", async () => {

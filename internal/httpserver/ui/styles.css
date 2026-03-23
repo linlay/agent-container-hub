@@ -358,7 +358,7 @@ label {
 }
 
 .row.filters {
-  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 1fr) 130px auto;
+  grid-template-columns: 164px minmax(0, 1fr) minmax(0, 1fr) 130px auto;
   align-items: end;
 }
 
