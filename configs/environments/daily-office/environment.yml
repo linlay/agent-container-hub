@@ -51,6 +51,8 @@ default_execute:
       echo "Node: $(node --version 2>&1)"
       echo "LibreOffice: $(soffice --version 2>&1)"
       echo "Himalaya: $(himalaya --version 2>&1 || echo 'not available')"
+      echo "DBX: $(dbx --version 2>&1 || echo 'not available')"
+      echo "HTTPX: $(httpx --version 2>&1 || echo 'not available')"
       echo ""
       echo "=== Python Packages ==="
       python -c "import openpyxl, pandas, pdfplumber, reportlab; print('Core packages OK')"
@@ -66,4 +68,4 @@ build:
   smoke_command: /bin/bash
   smoke_args:
     - -lc
-    - command -v bash >/dev/null && command -v python >/dev/null && command -v node >/dev/null && command -v soffice >/dev/null && command -v himalaya >/dev/null && python -c 'import defusedxml.minidom, markitdown, openpyxl' && node -e 'require("docx"); require("pptxgenjs"); require("sharp")'
+    - command -v bash >/dev/null && command -v python >/dev/null && command -v node >/dev/null && command -v soffice >/dev/null && command -v himalaya >/dev/null && command -v dbx >/dev/null && command -v httpx >/dev/null && python -c 'import defusedxml.minidom, markitdown, openpyxl' && node -e 'require("docx"); require("pptxgenjs"); require("sharp")'

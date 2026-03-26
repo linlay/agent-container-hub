@@ -797,8 +797,12 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	if bytes.Contains([]byte(dailyOffice.Build.Dockerfile), []byte("ENTRYPOINT")) {
 		t.Fatalf("daily-office Dockerfile unexpectedly contains ENTRYPOINT")
 	}
-	if len(dailyOffice.Build.SmokeArgs) == 0 || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("python -c")) || !bytes.Contains([]byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1]), []byte("node -e")) {
-		t.Fatalf("daily-office smoke args = %+v, want python/node import checks", dailyOffice.Build.SmokeArgs)
+	if len(dailyOffice.Build.SmokeArgs) == 0 {
+		t.Fatalf("daily-office smoke args = %+v, want cli/python/node checks", dailyOffice.Build.SmokeArgs)
+	}
+	smokeScript := []byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1])
+	if !bytes.Contains(smokeScript, []byte("command -v himalaya")) || !bytes.Contains(smokeScript, []byte("command -v dbx")) || !bytes.Contains(smokeScript, []byte("command -v httpx")) || !bytes.Contains(smokeScript, []byte("python -c")) || !bytes.Contains(smokeScript, []byte("node -e")) {
+		t.Fatalf("daily-office smoke args = %+v, want cli/python/node checks", dailyOffice.Build.SmokeArgs)
 	}
 	if !strings.Contains(dailyOffice.AgentPrompt, "daily-office") {
 		t.Fatalf("daily-office AgentPrompt = %q, want daily-office guidance", dailyOffice.AgentPrompt)

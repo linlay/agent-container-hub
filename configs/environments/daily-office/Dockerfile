@@ -6,7 +6,11 @@ ARG APT_SECURITY_MIRROR=""
 ARG APT_RETRIES=5
 ARG APT_TIMEOUT=30
 ARG HIMALAYA_VERSION=1.2.0
+ARG DBX_VERSION=0.1.0
+ARG HTTPX_VERSION=0.1.0
 ARG HIMALAYA_DOWNLOAD_URL=""
+ARG DBX_DOWNLOAD_URL=""
+ARG HTTPX_DOWNLOAD_URL=""
 ARG PIP_INDEX_URL=""
 ARG PIP_EXTRA_INDEX_URL=""
 ARG NPM_REGISTRY=""
@@ -146,43 +150,45 @@ RUN set -euo pipefail; \
 RUN set -euo pipefail; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
-        amd64) patterns=("x86_64-unknown-linux-gnu" "linux-x86_64" "x86_64-linux" "amd64") ;; \
-        arm64) patterns=("aarch64-unknown-linux-gnu" "linux-aarch64" "aarch64-linux" "arm64") ;; \
+        amd64) \
+            himalaya_asset="himalaya.x86_64-linux.tgz"; \
+            dbx_asset="dbx_v${DBX_VERSION}_linux_amd64.tar.gz"; \
+            httpx_asset="httpx_v${HTTPX_VERSION}_linux_amd64.tar.gz"; \
+            ;; \
+        arm64) \
+            himalaya_asset="himalaya.aarch64-linux.tgz"; \
+            dbx_asset="dbx_v${DBX_VERSION}_linux_arm64.tar.gz"; \
+            httpx_asset="httpx_v${HTTPX_VERSION}_linux_arm64.tar.gz"; \
+            ;; \
         *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
     esac; \
-    if [[ -n "${HIMALAYA_DOWNLOAD_URL}" ]]; then \
-        asset_url="${HIMALAYA_DOWNLOAD_URL}"; \
-    else \
-        release_json="$(curl -fsSL "https://api.github.com/repos/pimalaya/himalaya/releases/tags/v${HIMALAYA_VERSION}" || curl -fsSL "https://api.github.com/repos/pimalaya/himalaya/releases/tags/${HIMALAYA_VERSION}")"; \
-        asset_url=""; \
-        for pattern in "${patterns[@]}"; do \
-            asset_url="$(jq -r --arg pattern "${pattern}" '.assets[]?.browser_download_url | select(contains($pattern)) | select(test("\\.(tar\\.gz|tgz|zip)$"))' <<<"${release_json}" | head -n 1)"; \
-            if [[ -n "${asset_url}" ]]; then \
-                break; \
-            fi; \
-        done; \
-        if [[ -z "${asset_url}" ]]; then \
-            echo "Unable to find a Himalaya release asset for version ${HIMALAYA_VERSION}" >&2; \
-            jq -r '.assets[]?.browser_download_url' <<<"${release_json}" >&2; \
+    install_cli() { \
+        local cli_name="$1"; \
+        local asset_url="$2"; \
+        local tmpdir archive bin_path; \
+        tmpdir="$(mktemp -d)"; \
+        archive="${tmpdir}/$(basename "${asset_url%%\?*}")"; \
+        curl -fsSL "${asset_url}" -o "${archive}"; \
+        mkdir -p "${tmpdir}/unpacked"; \
+        case "${archive}" in \
+            *.zip) unzip -q "${archive}" -d "${tmpdir}/unpacked" ;; \
+            *.tgz|*.tar.gz) tar -xf "${archive}" -C "${tmpdir}/unpacked" ;; \
+            *) echo "Unsupported archive format for ${cli_name}: ${archive}" >&2; exit 1 ;; \
+        esac; \
+        bin_path="$(find "${tmpdir}/unpacked" -type f -name "${cli_name}" -perm -111 | head -n 1)"; \
+        if [[ -z "${bin_path}" ]]; then \
+            echo "Failed to locate the ${cli_name} binary in ${archive}" >&2; \
             exit 1; \
         fi; \
-    fi; \
-    tmpdir="$(mktemp -d)"; \
-    archive="${tmpdir}/$(basename "${asset_url%%\?*}")"; \
-    curl -fsSL "${asset_url}" -o "${archive}"; \
-    mkdir -p "${tmpdir}/unpacked"; \
-    case "${archive}" in \
-        *.zip) unzip -q "${archive}" -d "${tmpdir}/unpacked" ;; \
-        *.tgz|*.tar.gz) tar -xf "${archive}" -C "${tmpdir}/unpacked" ;; \
-        *) echo "Unsupported Himalaya archive format: ${archive}" >&2; exit 1 ;; \
-    esac; \
-    bin_path="$(find "${tmpdir}/unpacked" -type f -name himalaya -perm -111 | head -n 1)"; \
-    if [[ -z "${bin_path}" ]]; then \
-        echo "Failed to locate the himalaya binary in ${archive}" >&2; \
-        exit 1; \
-    fi; \
-    install -m 0755 "${bin_path}" /usr/local/bin/himalaya; \
-    rm -rf "${tmpdir}"
+        install -m 0755 "${bin_path}" "/usr/local/bin/${cli_name}"; \
+        rm -rf "${tmpdir}"; \
+    }; \
+    himalaya_url="${HIMALAYA_DOWNLOAD_URL:-https://cligrep.com/cli-releases/himalaya/v${HIMALAYA_VERSION}/${himalaya_asset}}"; \
+    dbx_url="${DBX_DOWNLOAD_URL:-https://cligrep.com/cli-releases/dbx/v${DBX_VERSION}/${dbx_asset}}"; \
+    httpx_url="${HTTPX_DOWNLOAD_URL:-https://cligrep.com/cli-releases/httpx/v${HTTPX_VERSION}/${httpx_asset}}"; \
+    install_cli "himalaya" "${himalaya_url}"; \
+    install_cli "dbx" "${dbx_url}"; \
+    install_cli "httpx" "${httpx_url}"
 
 RUN mkdir -p /workspace /skills
 
