@@ -73,6 +73,11 @@ if [[ "$TARGET_OS" == "linux" ]]; then
   mkdir -p "$BUNDLE_ROOT/systemd"
 fi
 
+BINARY_NAME="$APP_NAME"
+if [[ "$TARGET_OS" == "windows" ]]; then
+  BINARY_NAME="${APP_NAME}.exe"
+fi
+
 echo "[release] building binary..."
 CGO_ENABLED=0 GOOS="$TARGET_OS" GOARCH="$ARCH" \
   go build \
@@ -96,7 +101,9 @@ fi
 
 tar --exclude='.DS_Store' -C "$REPO_ROOT/configs" -cf - environments | tar -C "$BUNDLE_ROOT/configs" -xf -
 
-chmod +x "$BUNDLE_ROOT/$BINARY_NAME" "$BUNDLE_ROOT/start.sh" "$BUNDLE_ROOT/stop.sh"
+if [[ "$TARGET_OS" != "windows" ]]; then
+  chmod +x "$BUNDLE_ROOT/$BINARY_NAME" "$BUNDLE_ROOT/start.sh" "$BUNDLE_ROOT/stop.sh"
+fi
 
 mkdir -p "$(dirname "$BUNDLE_TAR")"
 tar -czf "$BUNDLE_TAR" -C "$TMP_DIR" "$APP_NAME"

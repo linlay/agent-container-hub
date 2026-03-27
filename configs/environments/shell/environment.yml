@@ -4,6 +4,10 @@ image_repository: busybox
 image_tag: latest
 default_cwd: /workspace
 enabled: true
+agent_prompt: |
+  你在一个轻量级 shell 容器中执行命令。
+  工作目录为 /workspace。可用命令取决于 busybox 内置工具集。
+  通过 extraMounts 挂载的平台目录可直接读写。
 default_execute:
   command: /bin/sh
   args:
