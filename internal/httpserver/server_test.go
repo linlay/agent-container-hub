@@ -817,6 +817,85 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	}
 }
 
+func TestBuiltinDailyOfficeProEnvironmentIsListed(t *testing.T) {
+	t.Parallel()
+
+	repoRoot, err := repoRootFromPackageDir()
+	if err != nil {
+		t.Fatalf("repoRootFromPackageDir() error = %v", err)
+	}
+	handler := newHandlerForConfigRoot(t, "", filepath.Join(repoRoot, "configs"))
+
+	envs := doJSON[[]api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments", nil, http.StatusOK, "")
+	found := false
+	for _, env := range envs {
+		if env.Name == "daily-office-pro" {
+			found = true
+			if env.ImageRef != "daily-office-pro:latest" {
+				t.Fatalf("daily-office-pro image_ref = %q, want daily-office-pro:latest", env.ImageRef)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("daily-office-pro not found in %+v", envs)
+	}
+
+	dailyOfficePro := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/daily-office-pro", nil, http.StatusOK, "")
+	if dailyOfficePro.DefaultExecute.Command != "/bin/bash" || len(dailyOfficePro.DefaultExecute.Args) != 2 || dailyOfficePro.DefaultExecute.TimeoutMS != 30000 {
+		t.Fatalf("daily-office-pro default execute = %+v, want health-check preset", dailyOfficePro.DefaultExecute)
+	}
+	if len(dailyOfficePro.Mounts) != 0 {
+		t.Fatalf("daily-office-pro mounts len = %d, want 0", len(dailyOfficePro.Mounts))
+	}
+	if dailyOfficePro.DefaultEnv["NODE_PATH"] != "/opt/daily-office-pro/node_modules" {
+		t.Fatalf("daily-office-pro NODE_PATH = %q", dailyOfficePro.DefaultEnv["NODE_PATH"])
+	}
+	for _, expected := range []string{
+		"/skills/skills/minimax-pdf/scripts",
+		"/skills/skills/minimax-xlsx/scripts",
+		"/skills/skills/minimax-docx/scripts",
+	} {
+		if !bytes.Contains([]byte(dailyOfficePro.DefaultEnv["PATH"]), []byte(expected)) {
+			t.Fatalf("daily-office-pro PATH = %q, want %s", dailyOfficePro.DefaultEnv["PATH"], expected)
+		}
+	}
+	if bytes.Contains([]byte(dailyOfficePro.Build.Dockerfile), []byte("COPY ")) {
+		t.Fatalf("daily-office-pro Dockerfile unexpectedly contains COPY")
+	}
+	if bytes.Contains([]byte(dailyOfficePro.Build.Dockerfile), []byte("ENTRYPOINT")) {
+		t.Fatalf("daily-office-pro Dockerfile unexpectedly contains ENTRYPOINT")
+	}
+	if len(dailyOfficePro.Build.SmokeArgs) == 0 {
+		t.Fatalf("daily-office-pro smoke args = %+v, want cli/python/node checks", dailyOfficePro.Build.SmokeArgs)
+	}
+	smokeScript := []byte(dailyOfficePro.Build.SmokeArgs[len(dailyOfficePro.Build.SmokeArgs)-1])
+	for _, expected := range [][]byte{
+		[]byte("command -v dotnet"),
+		[]byte("command -v chromium"),
+		[]byte("command -v pandoc"),
+		[]byte("command -v himalaya"),
+		[]byte("command -v dbx"),
+		[]byte("command -v httpx"),
+		[]byte("python -c"),
+		[]byte("node -e"),
+	} {
+		if !bytes.Contains(smokeScript, expected) {
+			t.Fatalf("daily-office-pro smoke args = %+v, want %q", dailyOfficePro.Build.SmokeArgs, expected)
+		}
+	}
+	if !strings.Contains(dailyOfficePro.AgentPrompt, "daily-office-pro") || !strings.Contains(dailyOfficePro.AgentPrompt, "/skills/skills/minimax-pdf") {
+		t.Fatalf("daily-office-pro AgentPrompt = %q, want MiniMax guidance", dailyOfficePro.AgentPrompt)
+	}
+
+	promptResp := doJSON[api.EnvironmentAgentPromptResponse](t, handler, http.MethodGet, "/api/environments/daily-office-pro/agent-prompt", nil, http.StatusOK, "")
+	if !promptResp.HasPrompt {
+		t.Fatal("daily-office-pro prompt HasPrompt = false, want true")
+	}
+	if !strings.Contains(promptResp.Prompt, "npm install -g") || !strings.Contains(promptResp.Prompt, "pptx-generator") {
+		t.Fatalf("daily-office-pro prompt = %q, want MiniMax package guidance", promptResp.Prompt)
+	}
+}
+
 func doJSON[T any](t *testing.T, handler http.Handler, method, path string, payload any, wantStatus int, bearer string) T {
 	t.Helper()
 

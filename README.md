@@ -47,6 +47,7 @@ environment 可以内嵌 Dockerfile。调用构建接口后，服务会：
 
 - `shell` -> `busybox:latest`
 - `daily-office` -> `daily-office:latest`
+- `daily-office-pro` -> `daily-office-pro:latest`
 
 ## 快速开始
 
@@ -364,20 +365,27 @@ curl -X POST http://127.0.0.1:11960/api/environments/shell/build
 
 ```bash
 cd configs/environments/daily-office && make build-cn
+cd configs/environments/daily-office-pro && make build
+cd configs/environments/daily-office-pro && make build-cn
 cd configs/environments/shell && make build
 cd configs/environments/shell && make build-cn
 ```
 
 - `daily-office build-cn` 主要优化 apt/pip/npm 等包管理源
+- `daily-office-pro build-cn` 主要优化 apt/pip/npm 等包管理源，并保留 MiniMax 办公工具链所需的额外运行时
 - `shell build-cn` 主要优化基础镜像拉取源，必要时可覆盖 `CN_BASE_IMAGE=...`
 
-内置 `daily-office` 直接通过 environment YAML 中的内联 Dockerfile 构建镜像，运行时则依赖只读 `/skills` 挂载：
+内置 `daily-office` 与 `daily-office-pro` 都通过环境目录中的 `Dockerfile` 构建镜像。`daily-office-pro` 运行时继续沿用只读 `/skills` 约定，推荐挂载：
 
 ```text
-/Users/linlay/Project/all-skills -> /skills
+/Users/linlay-macmini/Project/minimax-skills -> /skills
 ```
 
-宿主机仍需要具备容器引擎权限，以及访问基础镜像、apt/pip/npm 源和 Himalaya 下载源的能力。
+其中 `daily-office-pro` 采用 MiniMax skill 目录结构，例如 `/skills/skills/minimax-pdf`、`/skills/skills/minimax-xlsx`、`/skills/skills/minimax-docx`、`/skills/skills/pptx-generator` 与 `/skills/plugins/pptx-plugin/skills/...`。
+
+`daily-office-pro` 对外要求是 `.NET SDK 8+`。在 Apple Silicon / arm64 上，默认会安装 Microsoft Debian 12 源里该架构可用的 SDK 包，因此不保证包名仍然是 `dotnet-sdk-8.0`；如需强制指定，可在构建时传入 `DOTNET_SDK_PACKAGE=...`。
+
+宿主机仍需要具备容器引擎权限，以及访问基础镜像、apt/pip/npm 源、Microsoft .NET 包源和 Himalaya 下载源的能力。
 
 调用侧如果要给智能体注入环境专属提示词，可以先读取：
 
@@ -428,16 +436,16 @@ build:
     CMD ["/bin/sh"]
 ```
 
-`daily-office` 这类需要运行时技能目录挂载的环境，可以声明默认挂载与环境变量：
+`daily-office-pro` 这类需要运行时技能目录挂载的环境，可以通过 session mount 或 environment `mounts` 声明 `/skills`，并配合 MiniMax skill 路径约定设置环境变量：
 
 ```yaml
 mounts:
-  - source: /Users/linlay/Project/all-skills
+  - source: /Users/linlay-macmini/Project/minimax-skills
     destination: /skills
     read_only: true
 default_env:
-  NODE_PATH: /opt/daily-office/node_modules
-  PATH: /opt/daily-office/node_modules/.bin:/skills/scripts:/skills/docx/scripts:/skills/pptx/scripts:/skills/pdf/scripts:/skills/xlsx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  NODE_PATH: /opt/daily-office-pro/node_modules
+  PATH: /opt/daily-office-pro/node_modules/.bin:/skills/skills/minimax-pdf/scripts:/skills/skills/minimax-xlsx/scripts:/skills/skills/minimax-docx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:
   dockerfile: |
     FROM python:3.12-slim-bookworm
@@ -449,7 +457,7 @@ build:
 - API 的 `POST/PUT /api/environments*` 会直接写入或覆盖对应 YAML 文件
 - 手工修改 YAML 后无需重启，后续读取会直接生效
 - `agent_prompt` 可由调用侧在创建 session 前读取并注入到智能体提示词中
-- `daily-office` 默认会把宿主机 `/Users/linlay/Project/all-skills` 只读挂载到容器内 `/skills`
+- 当前内置 `daily-office-pro` 不会默认写死宿主机路径；推荐在创建 session 时把 `/Users/linlay-macmini/Project/minimax-skills` 只读挂载到容器内 `/skills`
 - `GET /api/environments` 遇到坏 YAML 会返回错误并带上文件名
 - `GET /api/environments/{name}`、创建 session、触发 build 只读取目标文件，不受无关坏文件影响
 - `GET /api/environments/{name}` 与管理站保存/选中环境后，会同时返回 YAML 预览文本
@@ -530,6 +538,7 @@ agent-container-hub/
     environments/
       shell/
       daily-office/
+      daily-office-pro/
   data/
     rootfs/
     builds/

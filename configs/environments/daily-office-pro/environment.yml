@@ -1,0 +1,87 @@
+name: daily-office-pro
+description: High-end daily office runtime for MiniMax PDF/XLSX/DOCX/PPT workflows with optional runtime-mounted skills under /skills.
+image_repository: daily-office-pro
+image_tag: latest
+default_cwd: /workspace
+default_env:
+  DAILY_OFFICE_HOME: /opt/daily-office-pro
+  NODE_PATH: /opt/daily-office-pro/node_modules
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+  PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium
+  PATH: /opt/daily-office-pro/node_modules/.bin:/skills/skills/minimax-pdf/scripts:/skills/skills/minimax-xlsx/scripts:/skills/skills/minimax-docx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+agent_prompt: |
+  You are running inside the `daily-office-pro` environment.
+
+  This environment is designed for MiniMax office skills mounted under `/skills`.
+
+  MiniMax skill layout:
+  - PDF skill: `/skills/skills/minimax-pdf`
+  - XLSX skill: `/skills/skills/minimax-xlsx`
+  - DOCX skill: `/skills/skills/minimax-docx`
+  - PPT generator: `/skills/skills/pptx-generator`
+  - PPT design/orchestration skills: `/skills/plugins/pptx-plugin/skills/...`
+
+  Important environment rules:
+  - Do not assume the legacy office layout exists under `/skills/docx`, `/skills/pdf`, `/skills/xlsx`, or `/skills/pptx`.
+  - Common Node packages are preinstalled under `/opt/daily-office-pro/node_modules`, not as global npm packages.
+  - Do not use `npm list -g <pkg>` as the primary availability check.
+  - Do not run `npm install -g <pkg>` unless you have already confirmed the package is unavailable through the environment-aware checks below.
+
+  Use these checks first:
+  - `node -p "require.resolve('<pkg>')"`
+  - `node -e "require('<pkg>'); console.log('<pkg> ok')"`
+  - `npm list --prefix /opt/daily-office-pro <pkg>`
+
+  Packages that should already be available here include:
+  - `playwright`
+  - `pptxgenjs`
+  - `react`
+  - `react-dom`
+  - `react-icons`
+  - `sharp`
+
+  If a package check fails:
+  1. Verify `NODE_PATH` is set.
+  2. Retry with `require.resolve(...)` or `npm list --prefix /opt/daily-office-pro`.
+  3. Only then explain that the package is truly missing and propose installation.
+
+  When working with MiniMax skills, prefer the environment-provided runtimes and the `/skills` mount before proposing extra setup.
+enabled: true
+default_execute:
+  command: /bin/bash
+  args:
+    - -lc
+    - |
+      echo "=== Environment Health Check ==="
+      echo "Hostname: $(hostname)"
+      echo "User: $(whoami)"
+      echo "Working Dir: $(pwd)"
+      echo "Disk Usage: $(df -h /workspace | tail -1)"
+      echo ""
+      echo "=== Tool Versions ==="
+      echo "Python: $(python --version 2>&1)"
+      echo "Node: $(node --version 2>&1)"
+      echo "npm: $(npm --version 2>&1)"
+      echo ".NET: $(dotnet --version 2>&1)"
+      echo "Chromium: $(chromium --version 2>&1)"
+      echo "LibreOffice: $(soffice --version 2>&1)"
+      echo "Pandoc: $(pandoc --version 2>&1 | head -n 1)"
+      echo "Himalaya: $(himalaya --version 2>&1 || echo 'not available')"
+      echo "DBX: $(dbx --version 2>&1 || echo 'not available')"
+      echo "HTTPX: $(httpx --version 2>&1 || echo 'not available')"
+      echo ""
+      echo "=== Python Packages ==="
+      python -c "import reportlab, pypdf, matplotlib, pandas, openpyxl, markitdown; print('Core packages OK')"
+      echo ""
+      echo "=== Node Packages ==="
+      node -e "require('playwright'); require('pptxgenjs'); require('react'); require('react-dom'); require('react-icons'); require('sharp'); console.log('Core packages OK')"
+      echo ""
+      echo "=== Skills Mount ==="
+      ls /skills/ 2>/dev/null || echo '/skills not mounted'
+  timeout_ms: 30000
+build:
+  notes: Runtime MiniMax skills can be mounted to /skills as read-only content when a session explicitly adds that mount, for example /Users/linlay-macmini/Project/minimax-skills -> /skills.
+  smoke_command: /bin/bash
+  smoke_args:
+    - -lc
+    - command -v bash >/dev/null && command -v python >/dev/null && command -v node >/dev/null && command -v npm >/dev/null && command -v dotnet >/dev/null && command -v zip >/dev/null && command -v unzip >/dev/null && command -v soffice >/dev/null && command -v pandoc >/dev/null && command -v chromium >/dev/null && command -v himalaya >/dev/null && command -v dbx >/dev/null && command -v httpx >/dev/null && python -c 'import reportlab, pypdf, matplotlib, pandas, openpyxl, markitdown' && node -e 'require("playwright"); require("pptxgenjs"); require("react"); require("react-dom"); require("react-icons"); require("sharp")'

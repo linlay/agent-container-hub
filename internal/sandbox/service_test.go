@@ -992,6 +992,65 @@ func TestDailyOfficeSessionAllowsExplicitSkillsMount(t *testing.T) {
 	}
 }
 
+func TestDailyOfficeProSessionAllowsExplicitSkillsMount(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	skillsRoot := filepath.Join(filepath.Dir(services.sessions.cfg.RootfsRoot), "skills-root-pro")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skillsRoot) error = %v", err)
+	}
+
+	expectedPath := "/opt/daily-office-pro/node_modules/.bin:/skills/skills/minimax-pdf/scripts:/skills/skills/minimax-xlsx/scripts:/skills/skills/minimax-docx/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "daily-office-pro",
+		ImageRepository: "daily-office-pro",
+		ImageTag:        "latest",
+		DefaultCwd:      runtime.DefaultMountPath,
+		DefaultEnv: map[string]string{
+			"NODE_PATH": "/opt/daily-office-pro/node_modules",
+			"PATH":      expectedPath,
+		},
+		Enabled: true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "daily-office-pro-session",
+		EnvironmentName: "daily-office-pro",
+		Mounts: []model.Mount{{
+			Source:      skillsRoot,
+			Destination: "/skills",
+			ReadOnly:    true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if fake.lastCreate.Env["NODE_PATH"] != "/opt/daily-office-pro/node_modules" {
+		t.Fatalf("NODE_PATH = %q", fake.lastCreate.Env["NODE_PATH"])
+	}
+	if fake.lastCreate.Env["PATH"] != expectedPath {
+		t.Fatalf("PATH = %q", fake.lastCreate.Env["PATH"])
+	}
+	if len(created.Mounts) != 2 {
+		t.Fatalf("created mounts len = %d, want 2", len(created.Mounts))
+	}
+	if created.Mounts[0].Destination != "/skills" || !created.Mounts[0].ReadOnly {
+		t.Fatalf("skills mount = %+v", created.Mounts[0])
+	}
+	if created.Mounts[1].Destination != runtime.DefaultMountPath || created.Mounts[1].ReadOnly {
+		t.Fatalf("rootfs mount = %+v", created.Mounts[1])
+	}
+}
+
 func TestCreateReturnsNotFoundWhenEnvironmentFileMissing(t *testing.T) {
 	t.Parallel()
 
