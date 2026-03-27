@@ -613,6 +613,25 @@ td strong {
   gap: 10px;
 }
 
+.pill.building {
+  background: rgba(10, 107, 105, 0.12);
+  color: var(--accent);
+}
+
+.pill.running {
+  background: rgba(10, 107, 105, 0.12);
+  color: var(--accent);
+}
+
+#build-progress-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+#build-progress-log {
+  min-height: 320px;
+  max-height: min(52vh, 560px);
+}
+
 #execute-log-backdrop .modal-body {
   display: flex;
   overflow: hidden;
@@ -931,6 +950,10 @@ td strong {
   .environment-layout,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  #build-progress-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .execution-log-layout .split {

@@ -53,6 +53,7 @@ export function openModal(id) {
     return;
   }
   backdrop.classList.add("open");
+  backdrop.dispatchEvent(new CustomEvent("modal:opened", { bubbles: true, detail: { id } }));
   syncBodyScrollLock();
   focusFirstElement(backdrop);
 }
@@ -63,6 +64,7 @@ export function closeModal(id) {
     return;
   }
   backdrop.classList.remove("open");
+  backdrop.dispatchEvent(new CustomEvent("modal:closed", { bubbles: true, detail: { id } }));
   syncBodyScrollLock();
 }
 

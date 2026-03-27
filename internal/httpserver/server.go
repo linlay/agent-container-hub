@@ -46,7 +46,9 @@ type EnvironmentService interface {
 }
 
 type BuildService interface {
-	BuildEnvironment(context.Context, string) (*api.BuildJobResponse, error)
+	StartBuildJob(context.Context, string) (*api.BuildJobResponse, error)
+	GetBuildJob(context.Context, string) (*api.BuildJobResponse, error)
+	SubscribeBuildJob(context.Context, string) (*api.BuildJobResponse, <-chan sandbox.BuildEvent, func(), error)
 }
 
 type Server struct {
@@ -114,7 +116,9 @@ func New(sessions SessionService, environments EnvironmentService, builds BuildS
 	apiMux.Handle("GET /api/environments/{name}/files", server.requireAuth(http.HandlerFunc(server.handleListEnvironmentFiles)))
 	apiMux.Handle("GET /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handleGetEnvironmentFile)))
 	apiMux.Handle("PUT /api/environments/{name}/files/{path...}", server.requireAuth(http.HandlerFunc(server.handlePutEnvironmentFile)))
-	apiMux.Handle("POST /api/environments/{name}/build", server.requireAuth(http.HandlerFunc(server.handleBuildEnvironment)))
+	apiMux.Handle("POST /api/environments/{name}/build-jobs", server.requireAuth(http.HandlerFunc(server.handleStartBuildJob)))
+	apiMux.Handle("GET /api/build-jobs/{id}", server.requireAuth(http.HandlerFunc(server.handleGetBuildJob)))
+	apiMux.Handle("GET /api/build-jobs/{id}/events", server.requireAuth(http.HandlerFunc(server.handleBuildJobEvents)))
 	apiMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})
@@ -146,6 +150,12 @@ func (w *apiResponseWriter) Write(payload []byte) (int, error) {
 		w.status = http.StatusOK
 	}
 	return w.ResponseWriter.Write(payload)
+}
+
+func (w *apiResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (w *apiResponseWriter) Status() int {
@@ -441,13 +451,76 @@ func (s *Server) handleUpsertEnvironment(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (s *Server) handleBuildEnvironment(w http.ResponseWriter, r *http.Request) {
-	response, err := s.builds.BuildEnvironment(r.Context(), r.PathValue("name"))
+func (s *Server) handleStartBuildJob(w http.ResponseWriter, r *http.Request) {
+	response, err := s.builds.StartBuildJob(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.writeMappedError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetBuildJob(w http.ResponseWriter, r *http.Request) {
+	response, err := s.builds.GetBuildJob(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeMappedError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleBuildJobEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	snapshot, events, cancel, err := s.builds.SubscribeBuildJob(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeMappedError(w, err)
+		return
+	}
+	defer cancel()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	writeSSEEvent(w, sandbox.BuildEventSnapshot, snapshot)
+	flusher.Flush()
+
+	if events == nil {
+		writeSSEEvent(w, sandbox.BuildEventComplete, snapshot)
+		flusher.Flush()
+		return
+	}
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+			flusher.Flush()
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			switch event.Type {
+			case sandbox.BuildEventLog:
+				writeSSEEvent(w, event.Type, map[string]string{
+					"id":    snapshot.ID,
+					"chunk": event.Chunk,
+				})
+			default:
+				writeSSEEvent(w, event.Type, event.Job)
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) serveUI(w http.ResponseWriter, name string) {
@@ -495,6 +568,17 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeSSEEvent(w http.ResponseWriter, event string, payload any) {
+	_, _ = fmt.Fprintf(w, "event: %s\n", event)
+	if payload != nil {
+		data, _ := json.Marshal(payload)
+		for _, line := range strings.Split(string(data), "\n") {
+			_, _ = fmt.Fprintf(w, "data: %s\n", line)
+		}
+	}
+	_, _ = fmt.Fprint(w, "\n")
 }
 
 func parsePositiveInt(value string, fallback int) int {

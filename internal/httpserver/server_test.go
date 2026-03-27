@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -755,6 +756,145 @@ func TestCreateSessionEndpointAcceptsRootMount(t *testing.T) {
 	}
 }
 
+func TestBuildJobEndpointsExposeActiveBuildAndSSE(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	fake.buildStarted = make(chan struct{}, 1)
+	fake.buildContinue = make(chan struct{})
+	fake.buildResult.Output = "step 1\nstep 2\n"
+
+	started := doJSON[api.BuildJobResponse](t, handler, http.MethodPost, "/api/environments/shell/build-jobs", map[string]string{}, http.StatusOK, "")
+	if started.Status != string(model.BuildJobStatusBuilding) {
+		t.Fatalf("started.Status = %q, want building", started.Status)
+	}
+
+	select {
+	case <-fake.buildStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for build to start")
+	}
+
+	activeEnvironment := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/shell", nil, http.StatusOK, "")
+	if activeEnvironment.LastBuild == nil || activeEnvironment.LastBuild.Status != string(model.BuildJobStatusBuilding) {
+		t.Fatalf("activeEnvironment.LastBuild = %+v, want building", activeEnvironment.LastBuild)
+	}
+
+	streamReady := make(chan struct{}, 1)
+	eventsDone := make(chan string, 1)
+	go func() {
+		resp, err := http.Get(server.URL + "/api/build-jobs/" + started.ID + "/events")
+		if err != nil {
+			eventsDone <- err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		reader := bufio.NewReader(resp.Body)
+		var body bytes.Buffer
+		for {
+			line, readErr := reader.ReadString('\n')
+			if line != "" {
+				body.WriteString(line)
+				if strings.Contains(body.String(), "event: snapshot") {
+					select {
+					case streamReady <- struct{}{}:
+					default:
+					}
+				}
+			}
+			if readErr != nil {
+				if readErr != io.EOF {
+					eventsDone <- readErr.Error()
+					return
+				}
+				break
+			}
+		}
+		eventsDone <- body.String()
+	}()
+
+	select {
+	case <-streamReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for snapshot event")
+	}
+
+	close(fake.buildContinue)
+
+	select {
+	case body := <-eventsDone:
+		for _, want := range []string{
+			"event: snapshot",
+			"event: log",
+			"event: complete",
+			`"status":"succeeded"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("event stream = %q, want %s", body, want)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event stream to complete")
+	}
+
+	persisted := doJSON[api.BuildJobResponse](t, handler, http.MethodGet, "/api/build-jobs/"+started.ID, nil, http.StatusOK, "")
+	if persisted.Status != string(model.BuildJobStatusSucceeded) {
+		t.Fatalf("persisted.Status = %q, want succeeded", persisted.Status)
+	}
+	if persisted.Output != "step 1\nstep 2\n" {
+		t.Fatalf("persisted.Output = %q, want build output", persisted.Output)
+	}
+}
+
+func TestStartBuildJobReturnsConflictWhenEnvironmentAlreadyBuilding(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	fake.buildStarted = make(chan struct{}, 1)
+	fake.buildContinue = make(chan struct{})
+	_ = doJSON[api.BuildJobResponse](t, handler, http.MethodPost, "/api/environments/shell/build-jobs", map[string]string{}, http.StatusOK, "")
+	select {
+	case <-fake.buildStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for build to start")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/environments/shell/build-jobs", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	close(fake.buildContinue)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("POST /api/environments/{name}/build-jobs status = %d, want 409", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "build already in progress") {
+		t.Fatalf("conflict body = %q, want conflict message", recorder.Body.String())
+	}
+}
+
 func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	t.Parallel()
 
@@ -1035,8 +1175,8 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 	}
 	serviceLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, serviceLogger)
-	environmentService := sandbox.NewEnvironmentService(envs, st, serviceLogger)
 	buildService := sandbox.NewBuildService(cfg, st, envs, fake, serviceLogger)
+	environmentService := sandbox.NewEnvironmentService(envs, buildService, serviceLogger)
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -1052,9 +1192,11 @@ func repoRootFromPackageDir() (string, error) {
 }
 
 type httpFakeRuntime struct {
-	containers  map[string]runtime.ContainerInfo
-	execResult  runtime.ExecResult
-	buildResult runtime.BuildResult
+	containers    map[string]runtime.ContainerInfo
+	execResult    runtime.ExecResult
+	buildResult   runtime.BuildResult
+	buildStarted  chan struct{}
+	buildContinue chan struct{}
 }
 
 func (f *httpFakeRuntime) Name() string { return "fake" }
@@ -1094,7 +1236,19 @@ func (f *httpFakeRuntime) Exec(_ context.Context, containerID string, _ runtime.
 	return f.execResult, nil
 }
 
-func (f *httpFakeRuntime) Build(_ context.Context, _ runtime.BuildOptions) (runtime.BuildResult, error) {
+func (f *httpFakeRuntime) Build(_ context.Context, opts runtime.BuildOptions) (runtime.BuildResult, error) {
+	if f.buildStarted != nil {
+		select {
+		case f.buildStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.buildContinue != nil {
+		<-f.buildContinue
+	}
+	if opts.OutputSink != nil && f.buildResult.Output != "" {
+		_, _ = io.WriteString(opts.OutputSink, f.buildResult.Output)
+	}
 	return f.buildResult, nil
 }
 

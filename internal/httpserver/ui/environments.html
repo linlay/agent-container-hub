@@ -132,6 +132,39 @@
   </main>
   <div class="toast-container" id="toast-container"></div>
 
+  <div class="modal-backdrop" id="build-progress-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2>Build Progress</h2>
+          <div class="meta">Watch the live image build stream and reconnect later if needed.</div>
+        </div>
+        <button class="secondary modal-close" data-close-modal="build-progress-backdrop">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="stack">
+          <div class="detail-grid" id="build-progress-summary">
+            <div class="detail-box">
+              <div class="meta">Environment</div>
+              <strong>-</strong>
+            </div>
+          </div>
+          <div class="toolbar wrap">
+            <div class="meta" id="build-progress-meta">No build selected.</div>
+            <label class="checkbox-inline">
+              <input id="build-progress-autoscroll" type="checkbox" checked>
+              Auto-scroll logs
+            </label>
+          </div>
+          <pre id="build-progress-log">Start a build to inspect live output.</pre>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" id="build-progress-refresh">Refresh Snapshot</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="/ui/environments.js"></script>
 </body>
 </html>

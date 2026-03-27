@@ -1,4 +1,14 @@
-import { api, escapeHTML, initializeShell, setLoading, showToast } from "/ui/common.js";
+import {
+  api,
+  bindModalDismiss,
+  escapeHTML,
+  initializeShell,
+  openModal,
+  setLoading,
+  showToast,
+} from "/ui/common.js";
+
+const ACTIVE_BUILD_STATUSES = new Set(["building", "smoke_checking"]);
 
 const state = {
   environments: {
@@ -8,11 +18,17 @@ const state = {
     selectedDetails: defaultEnvironmentDetails(),
     selectedDefaultExecute: defaultExecutePreset(),
     selectedAgentPrompt: "",
+    selectedLastBuild: null,
   },
   files: {
     items: [],
     selectedPath: "",
     selectedContent: "",
+  },
+  buildProgress: {
+    job: null,
+    log: "",
+    eventSource: null,
   },
 };
 
@@ -27,6 +43,12 @@ const saveFileButton = document.getElementById("save-file");
 const environmentFileList = document.getElementById("environment-file-list");
 const environmentFilePath = document.getElementById("environment-file-path");
 const environmentFileContent = document.getElementById("environment-file-content");
+const buildProgressBackdrop = document.getElementById("build-progress-backdrop");
+const buildProgressSummary = document.getElementById("build-progress-summary");
+const buildProgressMeta = document.getElementById("build-progress-meta");
+const buildProgressLog = document.getElementById("build-progress-log");
+const buildProgressRefresh = document.getElementById("build-progress-refresh");
+const buildProgressAutoscroll = document.getElementById("build-progress-autoscroll");
 
 function clearEnvironmentForm() {
   document.getElementById("name").value = "";
@@ -42,12 +64,14 @@ function clearEnvironmentForm() {
   state.environments.selectedDetails = defaultEnvironmentDetails();
   state.environments.selectedDefaultExecute = defaultExecutePreset();
   state.environments.selectedAgentPrompt = "";
+  state.environments.selectedLastBuild = null;
   state.files.items = [];
   state.files.selectedPath = "";
   state.files.selectedContent = "";
   environmentFilePath.value = "";
   environmentFileContent.value = "";
   renderEnvironmentFiles();
+  updateBuildButton();
 }
 
 function defaultBuild() {
@@ -57,6 +81,19 @@ function defaultBuild() {
     notes: "",
     smoke_command: "",
     smoke_args: [],
+  };
+}
+
+function defaultBuildJob() {
+  return {
+    id: "",
+    environment_name: "",
+    image_ref: "",
+    status: "",
+    output: "",
+    error: "",
+    started_at: "",
+    finished_at: "",
   };
 }
 
@@ -87,6 +124,16 @@ function normalizeBuild(build) {
   };
 }
 
+function normalizeBuildJob(job) {
+  if (!job) {
+    return null;
+  }
+  return {
+    ...defaultBuildJob(),
+    ...job,
+  };
+}
+
 function normalizeEnvironmentDetails(item) {
   return {
     ...defaultEnvironmentDetails(),
@@ -105,8 +152,19 @@ function normalizeExecutePreset(preset) {
   };
 }
 
-function fileTypeLabel(file) {
-  return `${file.type || "other"} · ${file.path}`;
+function formatBuildStatus(status) {
+  if (!status) {
+    return "unknown";
+  }
+  return status.replaceAll("_", " ");
+}
+
+function isBuildActive(status) {
+  return ACTIVE_BUILD_STATUSES.has(String(status || "").trim());
+}
+
+function buildStatusClass(status) {
+  return status === "failed" ? "stopped" : "building";
 }
 
 async function refreshEnvironmentFiles(name = state.environments.selectedName, preferredPath = "") {
@@ -193,7 +251,7 @@ function renderEnvironments() {
         <span class="pill ${item.enabled ? "" : "stopped"}">${item.enabled ? "enabled" : "disabled"}</span>
       </div>
       <div class="meta">${escapeHTML(item.image_ref || "-")}</div>
-      <div class="meta">${item.last_build ? `last build: ${escapeHTML(item.last_build.status)}` : "no build yet"}</div>
+      <div class="meta">${item.last_build ? `last build: ${escapeHTML(formatBuildStatus(item.last_build.status))}` : "no build yet"}</div>
     </div>
   `).join("") || `<div class="empty">No environments yet.</div>`;
 
@@ -202,6 +260,11 @@ function renderEnvironments() {
       await selectEnvironment(node.dataset.environmentName);
     });
   });
+}
+
+function updateBuildButton() {
+  const activeBuild = state.environments.selectedLastBuild;
+  buildButton.textContent = activeBuild && isBuildActive(activeBuild.status) ? "View Build Progress" : "Build Image";
 }
 
 async function selectEnvironment(name) {
@@ -216,14 +279,16 @@ async function selectEnvironment(name) {
   state.environments.selectedDetails = normalizeEnvironmentDetails(item);
   state.environments.selectedDefaultExecute = normalizeExecutePreset(item.default_execute);
   state.environments.selectedAgentPrompt = item.agent_prompt || "";
+  state.environments.selectedLastBuild = normalizeBuildJob(item.last_build);
   document.getElementById("default-execute-command").value = state.environments.selectedDefaultExecute.command || "";
   document.getElementById("default-execute-cwd").value = state.environments.selectedDefaultExecute.cwd || "";
   document.getElementById("default-execute-timeout").value = state.environments.selectedDefaultExecute.timeout_ms || "";
   document.getElementById("default-execute-args").value = state.environments.selectedDefaultExecute.args.join("\n");
   environmentOutput.textContent = item.last_build
-    ? `Last build ${item.last_build.status} at ${item.last_build.started_at || "-"}`
+    ? `Last build ${formatBuildStatus(item.last_build.status)} at ${item.last_build.started_at || "-"}`
     : "Environment loaded.";
   environmentYAML.textContent = item.yaml || "No YAML available.";
+  updateBuildButton();
   await refreshEnvironmentFiles(item.name, state.files.selectedPath || "environment.yml");
   renderEnvironments();
 }
@@ -258,8 +323,256 @@ function collectEnvironmentPayload() {
   };
 }
 
+function syncBuildReference(job) {
+  if (!job) {
+    return;
+  }
+  state.environments.items = state.environments.items.map((item) => (
+    item.name === job.environment_name
+      ? { ...item, last_build: normalizeBuildJob(job) }
+      : item
+  ));
+  if (state.environments.selectedName === job.environment_name) {
+    state.environments.selectedLastBuild = normalizeBuildJob(job);
+    environmentOutput.textContent = `Build ${formatBuildStatus(job.status)} for ${job.environment_name} (${job.image_ref}).`;
+    updateBuildButton();
+  }
+  renderEnvironments();
+}
+
+function renderBuildProgress() {
+  const job = state.buildProgress.job;
+  if (!job) {
+    buildProgressSummary.innerHTML = `
+      <div class="detail-box">
+        <div class="meta">Environment</div>
+        <strong>-</strong>
+      </div>
+    `;
+    buildProgressMeta.textContent = "No build selected.";
+    buildProgressLog.textContent = "Start a build to inspect live output.";
+    return;
+  }
+
+  buildProgressSummary.innerHTML = `
+    <div class="detail-box">
+      <div class="meta">Environment</div>
+      <strong>${escapeHTML(job.environment_name || "-")}</strong>
+    </div>
+    <div class="detail-box">
+      <div class="meta">Image</div>
+      <strong>${escapeHTML(job.image_ref || "-")}</strong>
+    </div>
+    <div class="detail-box">
+      <div class="meta">Status</div>
+      <span class="pill ${buildStatusClass(job.status)}">${escapeHTML(formatBuildStatus(job.status || "unknown"))}</span>
+    </div>
+    <div class="detail-box">
+      <div class="meta">Started</div>
+      <strong>${escapeHTML(job.started_at || "-")}</strong>
+    </div>
+  `;
+
+  const stateLabel = isBuildActive(job.status)
+    ? "Streaming build output."
+    : (job.error ? `Build finished with error: ${job.error}` : "Build finished.");
+  buildProgressMeta.textContent = `${stateLabel} Job ${job.id || "-"}${job.finished_at ? ` · finished ${job.finished_at}` : ""}`;
+  buildProgressLog.textContent = state.buildProgress.log || "Waiting for build output...";
+  if (buildProgressAutoscroll.checked) {
+    buildProgressLog.scrollTop = buildProgressLog.scrollHeight;
+  }
+}
+
+function disconnectBuildStream() {
+  if (state.buildProgress.eventSource) {
+    state.buildProgress.eventSource.close();
+    state.buildProgress.eventSource = null;
+  }
+}
+
+function applyBuildSnapshot(job) {
+  const normalized = normalizeBuildJob(job);
+  if (!normalized) {
+    return;
+  }
+  state.buildProgress.job = normalized;
+  state.buildProgress.log = normalized.output || "";
+  syncBuildReference(normalized);
+  renderBuildProgress();
+}
+
+function appendBuildLog(chunk) {
+  state.buildProgress.log += chunk;
+  if (state.buildProgress.job) {
+    state.buildProgress.job.output = state.buildProgress.log;
+  }
+  renderBuildProgress();
+}
+
+function connectBuildStream(jobID) {
+  disconnectBuildStream();
+  const source = new EventSource(`/api/build-jobs/${encodeURIComponent(jobID)}/events`);
+  state.buildProgress.eventSource = source;
+
+  const parsePayload = (event) => {
+    try {
+      return JSON.parse(event.data || "null");
+    } catch (error) {
+      return null;
+    }
+  };
+
+  source.addEventListener("snapshot", (event) => {
+    applyBuildSnapshot(parsePayload(event));
+  });
+
+  source.addEventListener("status", (event) => {
+    const payload = normalizeBuildJob(parsePayload(event));
+    if (!payload) {
+      return;
+    }
+    state.buildProgress.job = payload;
+    state.buildProgress.job.output = state.buildProgress.log;
+    syncBuildReference(payload);
+    renderBuildProgress();
+  });
+
+  source.addEventListener("log", (event) => {
+    const payload = parsePayload(event);
+    if (!payload?.chunk) {
+      return;
+    }
+    appendBuildLog(payload.chunk);
+  });
+
+  source.addEventListener("complete", async (event) => {
+    applyBuildSnapshot(parsePayload(event));
+    disconnectBuildStream();
+    const job = state.buildProgress.job;
+    if (job) {
+      showToast(`Build ${formatBuildStatus(job.status)} for ${job.environment_name}.`, job.status === "failed" ? "error" : "success");
+      await refreshEnvironments(state.environments.selectedName || job.environment_name);
+      if (state.environments.selectedName === job.environment_name) {
+        await selectEnvironment(job.environment_name);
+      }
+    }
+  });
+
+  source.onerror = async () => {
+    if (!state.buildProgress.eventSource) {
+      return;
+    }
+    disconnectBuildStream();
+    const job = state.buildProgress.job;
+    if (!job || !isBuildActive(job.status)) {
+      return;
+    }
+    try {
+      const refreshed = await api(`/api/build-jobs/${job.id}`);
+      applyBuildSnapshot(refreshed);
+      if (isBuildActive(refreshed.status)) {
+        connectBuildStream(refreshed.id);
+        return;
+      }
+    } catch (error) {
+      buildProgressMeta.textContent = `Build stream disconnected: ${error.message}`;
+    }
+  };
+}
+
+async function openBuildProgress(job) {
+  if (!job?.id) {
+    showToast("No build job is available yet.", "error");
+    return;
+  }
+  applyBuildSnapshot(job);
+  openModal("build-progress-backdrop");
+  if (isBuildActive(job.status)) {
+    connectBuildStream(job.id);
+  } else {
+    disconnectBuildStream();
+  }
+}
+
+async function openLatestBuildProgress(name) {
+  const environment = await api(`/api/environments/${name}`);
+  state.environments.selectedLastBuild = normalizeBuildJob(environment.last_build);
+  updateBuildButton();
+  if (!environment.last_build) {
+    showToast("This environment does not have a build job yet.", "error");
+    return;
+  }
+  await openBuildProgress(environment.last_build);
+}
+
+async function startBuild(name) {
+  state.buildProgress.job = normalizeBuildJob({
+    environment_name: name,
+    status: "building",
+    output: "",
+  });
+  state.buildProgress.log = "";
+  renderBuildProgress();
+  openModal("build-progress-backdrop");
+
+  const result = await api(`/api/environments/${name}/build-jobs`, {
+    method: "POST",
+    body: "{}",
+  });
+  await openBuildProgress(result);
+}
+
+async function handleBuildButtonClick() {
+  const name = document.getElementById("name").value.trim();
+  if (!name) {
+    environmentOutput.textContent = "Environment name is required before build.";
+    showToast("Environment name is required before build.", "error");
+    return;
+  }
+
+  setLoading(buildButton, true);
+  try {
+    if (state.environments.selectedLastBuild && isBuildActive(state.environments.selectedLastBuild.status)) {
+      await openBuildProgress(state.environments.selectedLastBuild);
+      return;
+    }
+    await startBuild(name);
+  } catch (error) {
+    if (String(error.message || "").includes("build already in progress")) {
+      await openLatestBuildProgress(name);
+      return;
+    }
+    environmentOutput.textContent = error.message;
+    showToast(error.message, "error");
+  } finally {
+    setLoading(buildButton, false);
+  }
+}
+
 async function initialize() {
   initializeShell("environments");
+  bindModalDismiss();
+
+  buildProgressBackdrop.addEventListener("modal:closed", () => {
+    disconnectBuildStream();
+  });
+
+  buildProgressRefresh.addEventListener("click", async () => {
+    const jobID = state.buildProgress.job?.id;
+    if (!jobID) {
+      showToast("No build job selected.", "error");
+      return;
+    }
+    try {
+      const result = await api(`/api/build-jobs/${jobID}`);
+      applyBuildSnapshot(result);
+      if (isBuildActive(result.status)) {
+        connectBuildStream(jobID);
+      }
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
 
   document.getElementById("refresh-environments").addEventListener("click", async () => {
     try {
@@ -282,6 +595,7 @@ async function initialize() {
       state.environments.selectedDetails = normalizeEnvironmentDetails(result);
       state.environments.selectedDefaultExecute = normalizeExecutePreset(result.default_execute);
       state.environments.selectedAgentPrompt = result.agent_prompt || "";
+      state.environments.selectedLastBuild = normalizeBuildJob(result.last_build);
       environmentOutput.textContent = "Environment saved.";
       environmentYAML.textContent = result.yaml || "No YAML available.";
       showToast(`Environment ${result.name} saved.`, "success");
@@ -294,30 +608,7 @@ async function initialize() {
     }
   });
 
-  buildButton.addEventListener("click", async () => {
-    const name = document.getElementById("name").value.trim();
-    if (!name) {
-      environmentOutput.textContent = "Environment name is required before build.";
-      showToast("Environment name is required before build.", "error");
-      return;
-    }
-
-    setLoading(buildButton, true);
-    try {
-      const result = await api(`/api/environments/${name}/build`, {
-        method: "POST",
-        body: "{}",
-      });
-      environmentOutput.textContent = `Build ${result.status} for ${result.environment_name} (${result.image_ref}).`;
-      showToast(`Build ${result.status} for ${result.environment_name}.`, result.status === "failed" ? "error" : "success");
-      await refreshEnvironments(name);
-    } catch (error) {
-      environmentOutput.textContent = error.message;
-      showToast(error.message, "error");
-    } finally {
-      setLoading(buildButton, false);
-    }
-  });
+  buildButton.addEventListener("click", handleBuildButtonClick);
 
   refreshFilesButton.addEventListener("click", async () => {
     try {
@@ -361,21 +652,23 @@ async function initialize() {
 
     setLoading(saveFileButton, true);
     try {
-      const result = await api(`/api/environments/${name}/files/${encodeURIComponent(path).replaceAll("%2F", "/")}`, {
+      const saved = await api(`/api/environments/${name}/files/${encodeURIComponent(path).replaceAll("%2F", "/")}`, {
         method: "PUT",
         body: JSON.stringify({ content: environmentFileContent.value }),
       });
-      state.files.selectedPath = result.path;
-      state.files.selectedContent = result.content || "";
-      environmentFilePath.value = result.path;
-      environmentFileContent.value = state.files.selectedContent;
-      environmentOutput.textContent = `Saved ${result.path}.`;
-      showToast(`Saved ${result.path}.`, "success");
-      if (result.path === "environment.yml") {
-        await refreshEnvironments(name);
-      } else {
-        await refreshEnvironmentFiles(name, result.path);
+      state.files.selectedPath = saved.path;
+      state.files.selectedContent = saved.content || "";
+      environmentFilePath.value = saved.path;
+      environmentFileContent.value = saved.content || "";
+      showToast(`Saved ${saved.path}.`, "success");
+      if (saved.path === "Dockerfile") {
+        state.environments.selectedBuild.dockerfile = saved.content || "";
       }
+      if (saved.path === "environment.yml") {
+        environmentYAML.textContent = saved.content || "No YAML available.";
+      }
+      await refreshEnvironmentFiles(name, saved.path);
+      await refreshEnvironments(name);
     } catch (error) {
       environmentOutput.textContent = error.message;
       showToast(error.message, "error");
@@ -384,10 +677,12 @@ async function initialize() {
     }
   });
 
-  await refreshEnvironments();
+  try {
+    await refreshEnvironments();
+  } catch (error) {
+    environmentOutput.textContent = error.message;
+    showToast(error.message, "error");
+  }
 }
 
-initialize().catch((error) => {
-  environmentOutput.textContent = error.message;
-  showToast(error.message, "error");
-});
+initialize();

@@ -98,6 +98,8 @@ func (p ExecutePreset) Clone() ExecutePreset {
 type BuildJobStatus string
 
 const (
+	BuildJobStatusBuilding      BuildJobStatus = "building"
+	BuildJobStatusSmokeChecking BuildJobStatus = "smoke_checking"
 	BuildJobStatusSucceeded BuildJobStatus = "succeeded"
 	BuildJobStatusFailed    BuildJobStatus = "failed"
 )

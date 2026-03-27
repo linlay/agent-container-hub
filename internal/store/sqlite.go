@@ -336,6 +336,28 @@ func (s *SQLiteStore) SaveBuildJob(_ context.Context, job *model.BuildJob) error
 	return nil
 }
 
+func (s *SQLiteStore) GetBuildJob(_ context.Context, id string) (*model.BuildJob, error) {
+	row := s.db.QueryRow(`
+		SELECT id, environment_name, image_ref, status, output, error, started_at, finished_at
+		FROM build_jobs
+		WHERE id = ?
+	`, id)
+
+	var job model.BuildJob
+	var status string
+	var startedAt, finishedAt string
+	if err := row.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get build job: %w", err)
+	}
+	job.Status = model.BuildJobStatus(status)
+	job.StartedAt = parseTime(startedAt)
+	job.FinishedAt = parseTime(finishedAt)
+	return &job, nil
+}
+
 func (s *SQLiteStore) ListBuildJobs(_ context.Context, environmentName string) ([]*model.BuildJob, error) {
 	query := `
 		SELECT id, environment_name, image_ref, status, output, error, started_at, finished_at

@@ -1680,6 +1680,129 @@ func TestBuildEnvironmentRejectsConcurrentBuildsForSameEnvironment(t *testing.T)
 	}
 }
 
+func TestStartBuildJobReturnsImmediatelyAndTracksActiveStatus(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "python",
+		ImageRepository: "python",
+		ImageTag:        "3.11",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM python:3.11\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.buildStarted = make(chan struct{}, 1)
+	fake.buildContinue = make(chan struct{})
+	fake.buildResult.Output = "building...\n"
+
+	job, err := services.builds.StartBuildJob(context.Background(), "python")
+	if err != nil {
+		t.Fatalf("StartBuildJob() error = %v", err)
+	}
+	if job.Status != string(model.BuildJobStatusBuilding) {
+		t.Fatalf("StartBuildJob() status = %q, want building", job.Status)
+	}
+
+	select {
+	case <-fake.buildStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for build to start")
+	}
+
+	latest, err := services.builds.LatestBuildJob(context.Background(), "python")
+	if err != nil {
+		t.Fatalf("LatestBuildJob() error = %v", err)
+	}
+	if latest == nil || latest.Status != string(model.BuildJobStatusBuilding) {
+		t.Fatalf("LatestBuildJob() = %+v, want building", latest)
+	}
+
+	close(fake.buildContinue)
+}
+
+func TestSubscribeBuildJobStreamsLogsAndCompletion(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "python",
+		ImageRepository: "python",
+		ImageTag:        "3.11",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM python:3.11\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	fake.buildStarted = make(chan struct{}, 1)
+	fake.buildContinue = make(chan struct{})
+	fake.buildResult.Output = "layer 1\nlayer 2\n"
+
+	started, err := services.builds.StartBuildJob(context.Background(), "python")
+	if err != nil {
+		t.Fatalf("StartBuildJob() error = %v", err)
+	}
+
+	snapshot, events, cancel, err := services.builds.SubscribeBuildJob(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("SubscribeBuildJob() error = %v", err)
+	}
+	defer cancel()
+	if snapshot.Status != string(model.BuildJobStatusBuilding) {
+		t.Fatalf("snapshot.Status = %q, want building", snapshot.Status)
+	}
+
+	select {
+	case <-fake.buildStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for build to start")
+	}
+	close(fake.buildContinue)
+
+	var sawLog, sawComplete bool
+	for !sawComplete {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				t.Fatal("events channel closed before complete event")
+			}
+			switch event.Type {
+			case BuildEventLog:
+				sawLog = sawLog || strings.Contains(event.Chunk, "layer 1")
+			case BuildEventComplete:
+				sawComplete = true
+				if event.Job == nil || event.Job.Status != string(model.BuildJobStatusSucceeded) {
+					t.Fatalf("complete job = %+v, want succeeded", event.Job)
+				}
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for build events")
+		}
+	}
+	if !sawLog {
+		t.Fatal("expected log event with streamed build output")
+	}
+
+	persisted, err := services.builds.GetBuildJob(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("GetBuildJob() error = %v", err)
+	}
+	if persisted.Output != "layer 1\nlayer 2\n" {
+		t.Fatalf("persisted.Output = %q, want build output", persisted.Output)
+	}
+}
+
 type testServices struct {
 	store        store.AppStore
 	envs         store.EnvironmentStore
@@ -1737,12 +1860,13 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	builds := NewBuildService(cfg, st, envs, fake, logger)
 	return &testServices{
 		store:        st,
 		envs:         envs,
 		sessions:     NewSessionService(cfg, st, envs, fake, logger),
-		environments: NewEnvironmentService(envs, st, logger),
-		builds:       NewBuildService(cfg, st, envs, fake, logger),
+		environments: NewEnvironmentService(envs, builds, logger),
+		builds:       builds,
 	}, func() { _ = st.Close() }, fake
 }
 
@@ -1861,6 +1985,9 @@ func (f *fakeRuntime) Build(_ context.Context, opts runtime.BuildOptions) (runti
 	}
 	if f.buildContinue != nil {
 		<-f.buildContinue
+	}
+	if opts.OutputSink != nil && f.buildResult.Output != "" {
+		_, _ = io.WriteString(opts.OutputSink, f.buildResult.Output)
 	}
 	if f.buildResult.StartedAt.IsZero() {
 		now := time.Now().UTC()

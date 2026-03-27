@@ -13,11 +13,15 @@ import (
 
 type EnvironmentService struct {
 	environments store.EnvironmentStore
-	builds       store.BuildJobStore
+	builds       interface {
+		LatestBuildJob(context.Context, string) (*api.BuildJobResponse, error)
+	}
 	logger       *slog.Logger
 }
 
-func NewEnvironmentService(environments store.EnvironmentStore, builds store.BuildJobStore, logger *slog.Logger) *EnvironmentService {
+func NewEnvironmentService(environments store.EnvironmentStore, builds interface {
+	LatestBuildJob(context.Context, string) (*api.BuildJobResponse, error)
+}, logger *slog.Logger) *EnvironmentService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -185,18 +189,12 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,
 	}
-	jobs, err := s.builds.ListBuildJobs(ctx, environment.Name)
+	latestBuild, err := s.builds.LatestBuildJob(ctx, environment.Name)
 	if err != nil {
 		return nil, err
 	}
-	if len(jobs) > 0 {
-		latest := jobs[0]
-		for _, job := range jobs[1:] {
-			if job.StartedAt.After(latest.StartedAt) {
-				latest = job
-			}
-		}
-		response.LastBuild = buildJobToResponse(latest)
+	if latestBuild != nil {
+		response.LastBuild = latestBuild
 	}
 	if includeYAML {
 		payload, err := s.environments.ReadEnvironmentFile(ctx, environment.Name, "environment.yml")

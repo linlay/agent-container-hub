@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 
 	"agent-container-hub/internal/model"
@@ -72,6 +73,7 @@ type BuildOptions struct {
 	DockerfilePath string
 	Image          string
 	BuildArgs      map[string]string
+	OutputSink     io.Writer
 }
 
 type BuildResult struct {

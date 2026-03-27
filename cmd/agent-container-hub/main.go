@@ -51,8 +51,8 @@ func main() {
 	}
 
 	sessionService := sandbox.NewSessionService(cfg, appStore, environmentStore, provider, logger)
-	environmentService := sandbox.NewEnvironmentService(environmentStore, appStore, logger)
 	buildService := sandbox.NewBuildService(cfg, appStore, environmentStore, provider, logger)
+	environmentService := sandbox.NewEnvironmentService(environmentStore, buildService, logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

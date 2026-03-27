@@ -25,6 +25,7 @@ type SessionExecutionStore interface {
 
 type BuildJobStore interface {
 	SaveBuildJob(context.Context, *model.BuildJob) error
+	GetBuildJob(context.Context, string) (*model.BuildJob, error)
 	ListBuildJobs(context.Context, string) ([]*model.BuildJob, error)
 }
 

@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"agent-container-hub/internal/model"
@@ -188,7 +190,7 @@ func (p *CLIProvider) Build(ctx context.Context, opts BuildOptions) (BuildResult
 		args = append(args, "--build-arg", fmt.Sprintf("%s=%s", key, value))
 	}
 	args = append(args, opts.ContextDir)
-	result, err := p.runCommand(ctx, args...)
+	result, err := p.runStreamingCommand(ctx, opts.OutputSink, args...)
 	finishedAt := time.Now().UTC()
 
 	buildResult := BuildResult{
@@ -274,6 +276,95 @@ func (p *CLIProvider) runCommand(ctx context.Context, args ...string) (commandRe
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	result := commandResult{
+		stdout: stdout.String(),
+		stderr: stderr.String(),
+	}
+	if err == nil {
+		return result, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		result.exitCode = exitErr.ExitCode()
+		return result, err
+	}
+	result.exitCode = -1
+	return result, err
+}
+
+func (p *CLIProvider) runStreamingCommand(ctx context.Context, sink io.Writer, args ...string) (commandResult, error) {
+	cmd := exec.CommandContext(ctx, p.binary, args...)
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return commandResult{exitCode: -1}, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return commandResult{exitCode: -1}, err
+	}
+	if err := cmd.Start(); err != nil {
+		return commandResult{exitCode: -1}, err
+	}
+
+	type outputChunk struct {
+		stream string
+		data   string
+		err    error
+	}
+
+	chunks := make(chan outputChunk, 32)
+	var readers sync.WaitGroup
+	for _, item := range []struct {
+		stream string
+		reader io.Reader
+	}{
+		{stream: "stdout", reader: stdoutPipe},
+		{stream: "stderr", reader: stderrPipe},
+	} {
+		readers.Add(1)
+		go func(stream string, reader io.Reader) {
+			defer readers.Done()
+			buffer := make([]byte, 4096)
+			for {
+				n, readErr := reader.Read(buffer)
+				if n > 0 {
+					chunks <- outputChunk{stream: stream, data: string(buffer[:n])}
+				}
+				if readErr != nil {
+					if !errors.Is(readErr, io.EOF) {
+						chunks <- outputChunk{stream: stream, err: readErr}
+					}
+					return
+				}
+			}
+		}(item.stream, item.reader)
+	}
+
+	go func() {
+		readers.Wait()
+		close(chunks)
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	for chunk := range chunks {
+		if chunk.err != nil {
+			_ = cmd.Process.Kill()
+			_, _ = stderr.WriteString(chunk.err.Error())
+			continue
+		}
+		switch chunk.stream {
+		case "stdout":
+			_, _ = stdout.WriteString(chunk.data)
+		default:
+			_, _ = stderr.WriteString(chunk.data)
+		}
+		if sink != nil {
+			_, _ = io.WriteString(sink, chunk.data)
+		}
+	}
+
+	err = cmd.Wait()
 	result := commandResult{
 		stdout: stdout.String(),
 		stderr: stderr.String(),
