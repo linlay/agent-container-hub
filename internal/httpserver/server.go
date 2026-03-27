@@ -551,10 +551,18 @@ func (s *Server) writeMappedError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, runtime.ErrContainerNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
+	case runtimePublicMessageAvailable(err):
+		message, _ := runtime.PublicErrorMessage(err)
+		writeError(w, http.StatusInternalServerError, message)
 	default:
 		s.logger.Error("internal api error", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
+}
+
+func runtimePublicMessageAvailable(err error) bool {
+	_, ok := runtime.PublicErrorMessage(err)
+	return ok
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

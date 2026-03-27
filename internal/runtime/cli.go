@@ -83,7 +83,7 @@ func (p *CLIProvider) Create(ctx context.Context, opts CreateOptions) (Container
 		if isAlreadyExists(result.stderr) {
 			return ContainerInfo{}, ErrContainerExists
 		}
-		return ContainerInfo{}, p.commandError(args, result, err)
+		return ContainerInfo{}, p.commandError(args, result, err, classifyCommandPublicMessage(opts.Image, result))
 	}
 	containerID := strings.TrimSpace(result.stdout)
 	return ContainerInfo{
@@ -103,7 +103,7 @@ func (p *CLIProvider) Start(ctx context.Context, containerID string) (ContainerI
 	}
 	result, err := p.runCommand(ctx, "start", resolvedID)
 	if err != nil {
-		return ContainerInfo{}, p.commandError([]string{"start", resolvedID}, result, err)
+		return ContainerInfo{}, p.commandError([]string{"start", resolvedID}, result, err, "")
 	}
 	return ContainerInfo{
 		ID:    resolvedID,
@@ -174,7 +174,7 @@ func (p *CLIProvider) Exec(ctx context.Context, containerID string, opts ExecOpt
 		execResult.ExitCode = result.exitCode
 		return execResult, nil
 	}
-	return ExecResult{}, p.commandError(args, result, err)
+	return ExecResult{}, p.commandError(args, result, err, "")
 }
 
 func (p *CLIProvider) Build(ctx context.Context, opts BuildOptions) (BuildResult, error) {
@@ -199,7 +199,7 @@ func (p *CLIProvider) Build(ctx context.Context, opts BuildOptions) (BuildResult
 		FinishedAt: finishedAt,
 	}
 	if err != nil {
-		return buildResult, p.commandError(args, result, err)
+		return buildResult, p.commandError(args, result, err, classifyCommandPublicMessage(opts.Image, result))
 	}
 	return buildResult, nil
 }
@@ -216,7 +216,7 @@ func (p *CLIProvider) Stop(ctx context.Context, containerID string, timeout time
 	args = append(args, resolvedID)
 	result, err := p.runCommand(ctx, args...)
 	if err != nil {
-		return p.commandError(args, result, err)
+		return p.commandError(args, result, err, "")
 	}
 	return err
 }
@@ -228,7 +228,7 @@ func (p *CLIProvider) Remove(ctx context.Context, containerID string) error {
 	}
 	result, err := p.runCommand(ctx, "rm", "-f", resolvedID)
 	if err != nil {
-		return p.commandError([]string{"rm", "-f", resolvedID}, result, err)
+		return p.commandError([]string{"rm", "-f", resolvedID}, result, err, "")
 	}
 	return nil
 }
@@ -240,7 +240,7 @@ func (p *CLIProvider) Inspect(ctx context.Context, containerID string) (Containe
 	}
 	result, err := p.runCommand(ctx, "inspect", resolvedID)
 	if err != nil {
-		return ContainerInfo{}, p.commandError([]string{"inspect", resolvedID}, result, err)
+		return ContainerInfo{}, p.commandError([]string{"inspect", resolvedID}, result, err, "")
 	}
 	infos, err := parseInspect(result.stdout)
 	if err != nil {
@@ -255,7 +255,7 @@ func (p *CLIProvider) Inspect(ctx context.Context, containerID string) (Containe
 func (p *CLIProvider) ListByLabel(ctx context.Context, key, value string) ([]ContainerInfo, error) {
 	result, err := p.runCommand(ctx, "ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}")
 	if err != nil {
-		return nil, p.commandError([]string{"ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}"}, result, err)
+		return nil, p.commandError([]string{"ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}"}, result, err, "")
 	}
 	ids := strings.Fields(strings.TrimSpace(result.stdout))
 	if len(ids) == 0 {
@@ -264,7 +264,7 @@ func (p *CLIProvider) ListByLabel(ctx context.Context, key, value string) ([]Con
 	args := append([]string{"inspect"}, ids...)
 	inspectResult, err := p.runCommand(ctx, args...)
 	if err != nil {
-		return nil, p.commandError(args, inspectResult, err)
+		return nil, p.commandError(args, inspectResult, err, "")
 	}
 	return parseInspect(inspectResult.stdout)
 }
@@ -381,21 +381,14 @@ func (p *CLIProvider) runStreamingCommand(ctx context.Context, sink io.Writer, a
 	return result, err
 }
 
-func (p *CLIProvider) commandError(args []string, result commandResult, err error) error {
-	detail := strings.TrimSpace(result.stderr)
-	if detail == "" {
-		detail = strings.TrimSpace(result.stdout)
-	}
-	if detail == "" {
-		return fmt.Errorf("%s %s: %w", p.binary, strings.Join(args, " "), err)
-	}
-	return fmt.Errorf("%s %s: %w: %s", p.binary, strings.Join(args, " "), err, detail)
+func (p *CLIProvider) commandError(args []string, result commandResult, err error, publicMessage string) error {
+	return newCommandFailure(p.binary, args, result, err, publicMessage)
 }
 
 func (p *CLIProvider) resolveContainerReference(ctx context.Context, ref string) (string, error) {
 	result, err := p.runCommand(ctx, "ps", "-a", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}")
 	if err != nil {
-		return "", p.commandError([]string{"ps", "-a", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}"}, result, err)
+		return "", p.commandError([]string{"ps", "-a", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}"}, result, err, "")
 	}
 	for _, line := range strings.Split(strings.TrimSpace(result.stdout), "\n") {
 		line = strings.TrimSpace(line)

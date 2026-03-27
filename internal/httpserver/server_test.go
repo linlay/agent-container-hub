@@ -377,6 +377,39 @@ func TestTargetedEnvironmentReadIgnoresUnrelatedInvalidYAML(t *testing.T) {
 	}
 }
 
+func TestCreateSessionReturnsSanitizedPublicRuntimeError(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	fake.createErr = fakeRuntimePublicError{
+		detail: `docker create --name run-demo --mount type=bind,src=/Users/linlay/Project/zenmind/.zenmind/root,dst=/root daily-office:latest: exit status 1: Unable to find image 'daily-office:latest' locally`,
+		public: `image "daily-office:latest" not found`,
+	}
+
+	payload := doJSON[map[string]string](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
+		SessionID:       "run-demo",
+		EnvironmentName: "daily-office",
+	}, http.StatusInternalServerError, "")
+	if payload["error"] != `image "daily-office:latest" not found` {
+		t.Fatalf("payload[error] = %q, want sanitized image-not-found error", payload["error"])
+	}
+	if strings.Contains(payload["error"], "/Users/linlay/Project/zenmind/.zenmind/root") {
+		t.Fatalf("payload[error] = %q, should not expose host path", payload["error"])
+	}
+	if strings.Contains(payload["error"], "docker create --name") {
+		t.Fatalf("payload[error] = %q, should not expose docker command detail", payload["error"])
+	}
+}
+
 func TestEnvironmentAPIResponsePreservesBuildMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -1197,11 +1230,15 @@ type httpFakeRuntime struct {
 	buildResult   runtime.BuildResult
 	buildStarted  chan struct{}
 	buildContinue chan struct{}
+	createErr     error
 }
 
 func (f *httpFakeRuntime) Name() string { return "fake" }
 
 func (f *httpFakeRuntime) Create(_ context.Context, opts runtime.CreateOptions) (runtime.ContainerInfo, error) {
+	if f.createErr != nil {
+		return runtime.ContainerInfo{}, f.createErr
+	}
 	id := "ctr-" + opts.Name
 	info := runtime.ContainerInfo{
 		ID:        id,
@@ -1298,4 +1335,17 @@ func (f *httpFakeRuntime) lookup(idOrName string) (runtime.ContainerInfo, bool) 
 		}
 	}
 	return runtime.ContainerInfo{}, false
+}
+
+type fakeRuntimePublicError struct {
+	detail string
+	public string
+}
+
+func (e fakeRuntimePublicError) Error() string {
+	return e.detail
+}
+
+func (e fakeRuntimePublicError) PublicMessage() string {
+	return e.public
 }

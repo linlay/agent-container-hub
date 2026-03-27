@@ -178,6 +178,101 @@ func TestCLIProviderExecReturnsNotFoundWhenReferenceMissing(t *testing.T) {
 	}
 }
 
+func TestClassifyImageNotFoundMessage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		image  string
+		detail string
+		want   string
+	}{
+		{
+			name:   "unable to find image locally",
+			image:  "daily-office:latest",
+			detail: "Unable to find image 'daily-office:latest' locally",
+			want:   `image "daily-office:latest" not found`,
+		},
+		{
+			name:   "pull access denied",
+			image:  "daily-office:latest",
+			detail: "Error response from daemon: pull access denied for daily-office, repository does not exist or may require 'docker login'",
+			want:   `image "daily-office:latest" not found`,
+		},
+		{
+			name:   "manifest unknown",
+			image:  "daily-office:latest",
+			detail: "manifest unknown",
+			want:   `image "daily-office:latest" not found`,
+		},
+		{
+			name:   "extract image from detail",
+			detail: "Unable to find image 'busybox:missing' locally",
+			want:   `image "busybox:missing" not found`,
+		},
+		{
+			name:   "unclassified error",
+			image:  "daily-office:latest",
+			detail: "permission denied",
+			want:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := classifyImageNotFoundMessage(tc.image, tc.detail); got != tc.want {
+				t.Fatalf("classifyImageNotFoundMessage(%q, %q) = %q, want %q", tc.image, tc.detail, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCLIProviderCreateReturnsSanitizedImageNotFoundMessage(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	t.Setenv("FAKE_RUNTIME_CREATE_EXIT", "1")
+	t.Setenv("FAKE_RUNTIME_CREATE_STDERR", "Unable to find image 'daily-office:latest' locally\nError response from daemon: pull access denied for daily-office, repository does not exist or may require 'docker login'")
+
+	_, err := provider.Create(context.Background(), CreateOptions{
+		Name:  "demo",
+		Image: "daily-office:latest",
+	})
+	if err == nil {
+		t.Fatal("Create() error = nil, want runtime failure")
+	}
+	message, ok := PublicErrorMessage(err)
+	if !ok {
+		t.Fatalf("PublicErrorMessage(%v) ok = false, want true", err)
+	}
+	if message != `image "daily-office:latest" not found` {
+		t.Fatalf("PublicErrorMessage(%v) = %q, want %q", err, message, `image "daily-office:latest" not found`)
+	}
+	if !strings.Contains(err.Error(), "Unable to find image 'daily-office:latest' locally") {
+		t.Fatalf("Create() error = %q, want raw runtime detail", err.Error())
+	}
+}
+
+func TestCLIProviderBuildDoesNotExposeUnclassifiedRuntimeFailure(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	t.Setenv("FAKE_RUNTIME_BUILD_EXIT", "1")
+	t.Setenv("FAKE_RUNTIME_BUILD_STDERR", "permission denied")
+
+	_, err := provider.Build(context.Background(), BuildOptions{
+		ContextDir: ".",
+		Image:      "daily-office:latest",
+	})
+	if err == nil {
+		t.Fatal("Build() error = nil, want runtime failure")
+	}
+	if message, ok := PublicErrorMessage(err); ok {
+		t.Fatalf("PublicErrorMessage(%v) = %q, want no public message", err, message)
+	}
+}
+
 func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 	t.Helper()
 
@@ -198,10 +293,20 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 		"  fi\n" +
 		"  ;;\n" +
 		"create)\n" +
+		"  printf '%s' \"$FAKE_RUNTIME_CREATE_STDOUT\"\n" +
+		"  printf '%s' \"$FAKE_RUNTIME_CREATE_STDERR\" >&2\n" +
+		"  if [ -n \"$FAKE_RUNTIME_CREATE_EXIT\" ]; then\n" +
+		"    exit \"$FAKE_RUNTIME_CREATE_EXIT\"\n" +
+		"  fi\n" +
 		"  echo ctr-demo\n" +
 		"  ;;\n" +
 		"start)\n" +
 		"  exit 0\n" +
+		"  ;;\n" +
+		"build)\n" +
+		"  printf '%s' \"$FAKE_RUNTIME_BUILD_STDOUT\"\n" +
+		"  printf '%s' \"$FAKE_RUNTIME_BUILD_STDERR\" >&2\n" +
+		"  exit \"${FAKE_RUNTIME_BUILD_EXIT:-0}\"\n" +
 		"  ;;\n" +
 		"inspect)\n" +
 		"  if [ \"$FAKE_RUNTIME_INSPECT_MODE\" = 'missing' ]; then\n" +
