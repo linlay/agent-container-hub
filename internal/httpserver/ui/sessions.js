@@ -34,7 +34,7 @@ const state = {
     selectedID: 0,
   },
   createSession: {
-    enabledEnvironments: [],
+    environments: [],
     selectedEnvironment: "",
     templateRoot: "",
     templateMounts: [],
@@ -168,6 +168,54 @@ function quickExecutePresetForEnvironment(environmentName) {
   return state.environmentsByName[environmentName]?.default_execute || {};
 }
 
+function canCreateSessionFromEnvironment(item) {
+  return Boolean(item?.enabled && item?.available);
+}
+
+function blockedEnvironmentReason(item) {
+  if (!item?.enabled) {
+    return "disabled";
+  }
+  if (!item?.available) {
+    return "missing image";
+  }
+  return "";
+}
+
+function creatableEnvironments() {
+  return state.createSession.environments.filter((item) => canCreateSessionFromEnvironment(item));
+}
+
+function createEnvironmentOptionLabel(item) {
+  const base = `${item.name} · ${item.image_ref || "-"}`;
+  const reason = blockedEnvironmentReason(item);
+  return reason ? `${base} · ${reason}` : base;
+}
+
+function createEnvironmentHintText(selectedEnvironment) {
+  const items = state.createSession.environments;
+  const creatable = creatableEnvironments();
+  if (items.length === 0) {
+    return "No environments available. Create one from the Environments page first.";
+  }
+  if (!selectedEnvironment) {
+    if (creatable.length === 0) {
+      const disabledCount = items.filter((item) => !item.enabled).length;
+      const missingCount = items.filter((item) => item.enabled && !item.available).length;
+      return `No environment can create sessions right now. Disabled: ${disabledCount}. Missing local image: ${missingCount}.`;
+    }
+    return `${creatable.length} environment(s) ready for session creation.`;
+  }
+  const reason = blockedEnvironmentReason(selectedEnvironment);
+  if (!reason) {
+    return `${creatable.length} environment(s) ready for session creation.`;
+  }
+  if (reason === "disabled") {
+    return `${selectedEnvironment.name} is manually disabled and cannot create sessions.`;
+  }
+  return `${selectedEnvironment.name} cannot create sessions because ${selectedEnvironment.image_ref || "its image"} is missing locally.`;
+}
+
 function renderSessionActionButton({
   action,
   label,
@@ -209,7 +257,7 @@ async function refreshSessions(preserveSelection = true) {
 async function refreshEnvironmentMetadata(preferredName = "") {
   const items = await api("/api/environments");
   state.environmentsByName = Object.fromEntries((items || []).map((item) => [item.name, item]));
-  state.createSession.enabledEnvironments = (items || []).filter((item) => item.enabled);
+  state.createSession.environments = items || [];
   renderCreateEnvironmentOptions(preferredName);
   renderSessionTable();
 }
@@ -228,40 +276,44 @@ async function refreshSessionCreateTemplate() {
 }
 
 function preferredEnvironmentName(fallbackName = "") {
-  const enabledNames = new Set(state.createSession.enabledEnvironments.map((item) => item.name));
-  if (fallbackName && enabledNames.has(fallbackName)) {
+  const creatableNames = new Set(creatableEnvironments().map((item) => item.name));
+  if (fallbackName && creatableNames.has(fallbackName)) {
     return fallbackName;
   }
   const filterEnvironment = state.sessions.filters.environment_name.trim();
-  if (filterEnvironment && enabledNames.has(filterEnvironment)) {
+  if (filterEnvironment && creatableNames.has(filterEnvironment)) {
     return filterEnvironment;
   }
-  if (state.createSession.selectedEnvironment && enabledNames.has(state.createSession.selectedEnvironment)) {
+  if (state.createSession.selectedEnvironment && creatableNames.has(state.createSession.selectedEnvironment)) {
     return state.createSession.selectedEnvironment;
   }
-  return state.createSession.enabledEnvironments[0]?.name || "";
+  return creatableEnvironments()[0]?.name || "";
 }
 
 function renderCreateEnvironmentOptions(preferredName = "") {
-  const enabledEnvironments = state.createSession.enabledEnvironments;
+  const environments = state.createSession.environments;
   const selectedName = preferredEnvironmentName(preferredName);
 
-  if (enabledEnvironments.length === 0) {
-    createEnvironmentSelect.innerHTML = `<option value="">No enabled environments</option>`;
+  if (environments.length === 0) {
+    createEnvironmentSelect.innerHTML = `<option value="">No environments</option>`;
     createEnvironmentSelect.disabled = true;
     createSessionButton.disabled = true;
-    createEnvironmentHint.textContent = "No enabled environments available. Create or enable one from the Environments page first.";
+    createEnvironmentHint.textContent = createEnvironmentHintText(null);
     state.createSession.selectedEnvironment = "";
     return;
   }
 
-  createEnvironmentSelect.innerHTML = enabledEnvironments.map((item) => `
-    <option value="${escapeHTML(item.name)}">${escapeHTML(item.name)} · ${escapeHTML(item.image_ref || "-")}</option>
+  createEnvironmentSelect.innerHTML = environments.map((item) => `
+    <option value="${escapeHTML(item.name)}" ${canCreateSessionFromEnvironment(item) ? "" : "disabled"}>
+      ${escapeHTML(createEnvironmentOptionLabel(item))}
+    </option>
   `).join("");
   createEnvironmentSelect.disabled = false;
-  createSessionButton.disabled = false;
+  createSessionButton.disabled = !selectedName;
   createEnvironmentSelect.value = selectedName;
-  createEnvironmentHint.textContent = `${enabledEnvironments.length} enabled environment(s) available.`;
+  createEnvironmentHint.textContent = createEnvironmentHintText(
+    environments.find((item) => item.name === selectedName) || null,
+  );
   state.createSession.selectedEnvironment = selectedName;
 }
 
@@ -802,6 +854,7 @@ async function initialize() {
 
   createEnvironmentSelect.addEventListener("change", () => {
     state.createSession.selectedEnvironment = createEnvironmentSelect.value;
+    renderCreateEnvironmentOptions(createEnvironmentSelect.value);
   });
 
   document.getElementById("add-mount-row").addEventListener("click", (event) => {
@@ -885,8 +938,8 @@ async function initialize() {
   createSessionButton.addEventListener("click", async () => {
     const environmentName = createEnvironmentSelect.value.trim();
     if (!environmentName) {
-      sessionCreateOutput.textContent = "Select an enabled environment before creating a session.";
-      showToast("Select an enabled environment before creating a session.", "error");
+      sessionCreateOutput.textContent = "Select an enabled environment with a local image before creating a session.";
+      showToast("Select an enabled environment with a local image before creating a session.", "error");
       return;
     }
 

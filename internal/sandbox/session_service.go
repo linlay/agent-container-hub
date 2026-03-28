@@ -64,6 +64,13 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 	if !environment.Enabled {
 		return nil, fmt.Errorf("%w: environment is disabled", ErrValidation)
 	}
+	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef())
+	if err != nil {
+		return nil, err
+	}
+	if !available {
+		return nil, fmt.Errorf("%w: image %q not found locally", ErrValidation, environment.ImageRef())
+	}
 	if err := model.ValidateEnvMap(environment.DefaultEnv, "default_env"); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
 	}

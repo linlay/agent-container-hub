@@ -381,6 +381,7 @@ func TestCreateSessionReturnsSanitizedPublicRuntimeError(t *testing.T) {
 	t.Parallel()
 
 	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	fake.allowUnknownImages = false
 	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
 		Name:            "daily-office",
 		ImageRepository: "daily-office",
@@ -390,23 +391,53 @@ func TestCreateSessionReturnsSanitizedPublicRuntimeError(t *testing.T) {
 			Dockerfile: "FROM busybox:latest\n",
 		},
 	}, http.StatusOK, "")
-	fake.createErr = fakeRuntimePublicError{
-		detail: `docker create --name run-demo --mount type=bind,src=/Users/linlay/Project/zenmind/.zenmind/root,dst=/root daily-office:latest: exit status 1: Unable to find image 'daily-office:latest' locally`,
-		public: `image "daily-office:latest" not found`,
-	}
-
 	payload := doJSON[map[string]string](t, handler, http.MethodPost, "/api/sessions/create", api.CreateSessionRequest{
 		SessionID:       "run-demo",
 		EnvironmentName: "daily-office",
-	}, http.StatusInternalServerError, "")
-	if payload["error"] != `image "daily-office:latest" not found` {
-		t.Fatalf("payload[error] = %q, want sanitized image-not-found error", payload["error"])
+	}, http.StatusBadRequest, "")
+	if payload["error"] != `validation failed: image "daily-office:latest" not found locally` {
+		t.Fatalf("payload[error] = %q, want missing-local-image validation error", payload["error"])
 	}
-	if strings.Contains(payload["error"], "/Users/linlay/Project/zenmind/.zenmind/root") {
-		t.Fatalf("payload[error] = %q, should not expose host path", payload["error"])
+	if len(fake.containers) != 0 {
+		t.Fatalf("containers = %+v, want no runtime create attempt", fake.containers)
 	}
-	if strings.Contains(payload["error"], "docker create --name") {
-		t.Fatalf("payload[error] = %q, should not expose docker command detail", payload["error"])
+}
+
+func TestEnvironmentResponseIncludesAvailability(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	fake.allowUnknownImages = false
+	fake.images["busybox:latest"] = runtime.ImageInfo{
+		ID:        "sha256:busybox",
+		Ref:       "busybox:latest",
+		CreatedAt: time.Now().UTC(),
+	}
+
+	availableEnv := doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "available-shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	if !availableEnv.Available {
+		t.Fatal("available-shell available = false, want true")
+	}
+
+	missingEnv := doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "missing-shell",
+		ImageRepository: "missing-shell",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	if missingEnv.Available {
+		t.Fatal("missing-shell available = true, want false")
 	}
 }
 
@@ -1267,8 +1298,9 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 	}
 
 	fake := &httpFakeRuntime{
-		containers: make(map[string]runtime.ContainerInfo),
-		images:     make(map[string]runtime.ImageInfo),
+		containers:         make(map[string]runtime.ContainerInfo),
+		images:             make(map[string]runtime.ImageInfo),
+		allowUnknownImages: true,
 		execResult: runtime.ExecResult{
 			ExitCode:   0,
 			Stdout:     "ok",
@@ -1284,7 +1316,7 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 	serviceLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, serviceLogger)
 	buildService := sandbox.NewBuildService(cfg, st, envs, fake, serviceLogger)
-	environmentService := sandbox.NewEnvironmentService(cfg.ConfigRoot, envs, buildService, serviceLogger)
+	environmentService := sandbox.NewEnvironmentService(cfg.ConfigRoot, envs, buildService, fake, serviceLogger)
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -1300,13 +1332,14 @@ func repoRootFromPackageDir() (string, error) {
 }
 
 type httpFakeRuntime struct {
-	containers    map[string]runtime.ContainerInfo
-	images        map[string]runtime.ImageInfo
-	execResult    runtime.ExecResult
-	buildResult   runtime.BuildResult
-	buildStarted  chan struct{}
-	buildContinue chan struct{}
-	createErr     error
+	containers         map[string]runtime.ContainerInfo
+	images             map[string]runtime.ImageInfo
+	allowUnknownImages bool
+	execResult         runtime.ExecResult
+	buildResult        runtime.BuildResult
+	buildStarted       chan struct{}
+	buildContinue      chan struct{}
+	createErr          error
 }
 
 func (f *httpFakeRuntime) Name() string { return "fake" }
@@ -1394,6 +1427,13 @@ func (f *httpFakeRuntime) Inspect(_ context.Context, containerID string) (runtim
 func (f *httpFakeRuntime) InspectImage(_ context.Context, imageRef string) (runtime.ImageInfo, error) {
 	info, ok := f.images[imageRef]
 	if !ok {
+		if f.allowUnknownImages {
+			return runtime.ImageInfo{
+				ID:        "sha256:auto-" + imageRef,
+				Ref:       imageRef,
+				CreatedAt: time.Now().UTC(),
+			}, nil
+		}
 		return runtime.ImageInfo{}, runtime.ErrImageNotFound
 	}
 	return info, nil

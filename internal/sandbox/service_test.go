@@ -343,6 +343,105 @@ func TestCreateRejectsDisabledEnvironment(t *testing.T) {
 	}
 }
 
+func TestEnvironmentResponseTracksLocalImageAvailability(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	fake.allowUnknownImages = false
+	fake.images["busybox:latest"] = runtime.ImageInfo{
+		ID:        "sha256:busybox",
+		Ref:       "busybox:latest",
+		CreatedAt: time.Now().UTC(),
+	}
+
+	for _, req := range []api.UpsertEnvironmentRequest{
+		{
+			Name:            "enabled-present",
+			ImageRepository: "busybox",
+			ImageTag:        "latest",
+			Enabled:         true,
+			Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
+		},
+		{
+			Name:            "enabled-missing",
+			ImageRepository: "missing",
+			ImageTag:        "latest",
+			Enabled:         true,
+			Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
+		},
+		{
+			Name:            "disabled-present",
+			ImageRepository: "busybox",
+			ImageTag:        "latest",
+			Enabled:         false,
+			Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
+		},
+		{
+			Name:            "disabled-missing",
+			ImageRepository: "missing-disabled",
+			ImageTag:        "latest",
+			Enabled:         false,
+			Build:           model.BuildSpec{Dockerfile: "FROM busybox:latest\n"},
+		},
+	} {
+		if _, err := services.environments.Upsert(context.Background(), req); err != nil {
+			t.Fatalf("Upsert(%s) error = %v", req.Name, err)
+		}
+	}
+
+	assertAvailability := func(name string, wantEnabled, wantAvailable bool) {
+		t.Helper()
+		got, err := services.environments.Get(context.Background(), name)
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", name, err)
+		}
+		if got.Enabled != wantEnabled {
+			t.Fatalf("%s enabled = %v, want %v", name, got.Enabled, wantEnabled)
+		}
+		if got.Available != wantAvailable {
+			t.Fatalf("%s available = %v, want %v", name, got.Available, wantAvailable)
+		}
+	}
+
+	assertAvailability("enabled-present", true, true)
+	assertAvailability("enabled-missing", true, false)
+	assertAvailability("disabled-present", false, true)
+	assertAvailability("disabled-missing", false, false)
+}
+
+func TestCreateRejectsMissingLocalImage(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	fake.allowUnknownImages = false
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "missing-image",
+		ImageRepository: "missing-image",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	_, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		EnvironmentName: "missing-image",
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), `image "missing-image:latest" not found locally`) {
+		t.Fatalf("Create() error = %v, want missing local image message", err)
+	}
+}
+
 func TestCreateMergesEnvironmentAndSessionMounts(t *testing.T) {
 	t.Parallel()
 
@@ -1879,6 +1978,7 @@ func TestReconcileExistingImagesCreatesSucceededBuildForHostImage(t *testing.T) 
 
 	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
+	fake.allowUnknownImages = false
 
 	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
 		Name:            "daily-office",
@@ -1928,6 +2028,7 @@ func TestReconcileExistingImagesDoesNotDuplicateCurrentImageRecord(t *testing.T)
 
 	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
+	fake.allowUnknownImages = false
 
 	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
 		Name:            "daily-office",
@@ -1967,6 +2068,7 @@ func TestReconcileExistingImagesCreatesRecordWhenEnvironmentMovesToNewImageRef(t
 
 	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
+	fake.allowUnknownImages = false
 
 	initial := api.UpsertEnvironmentRequest{
 		Name:            "daily-office",
@@ -2064,8 +2166,9 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 		t.Fatalf("store.OpenFileEnvironmentStore() error = %v", err)
 	}
 	fake := &fakeRuntime{
-		containers: make(map[string]runtime.ContainerInfo),
-		images:     make(map[string]runtime.ImageInfo),
+		containers:         make(map[string]runtime.ContainerInfo),
+		images:             make(map[string]runtime.ImageInfo),
+		allowUnknownImages: true,
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -2075,32 +2178,33 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 		store:        st,
 		envs:         envs,
 		sessions:     NewSessionService(cfg, st, envs, fake, logger),
-		environments: NewEnvironmentService(cfg.ConfigRoot, envs, builds, logger),
+		environments: NewEnvironmentService(cfg.ConfigRoot, envs, builds, fake, logger),
 		builds:       builds,
 	}, func() { _ = st.Close() }, fake
 }
 
 type fakeRuntime struct {
-	mu              sync.Mutex
-	containers      map[string]runtime.ContainerInfo
-	images          map[string]runtime.ImageInfo
-	createErr       error
-	execResult      runtime.ExecResult
-	execErr         error
-	startErr        error
-	stopErr         error
-	removeErr       error
-	inspectErr      error
-	inspectImageErr error
-	lastCreate      runtime.CreateOptions
-	lastExec        runtime.ExecOptions
-	startCalls      int
-	lastBuild       runtime.BuildOptions
-	buildResult     runtime.BuildResult
-	buildFiles      map[string]string
-	buildErr        error
-	buildStarted    chan struct{}
-	buildContinue   chan struct{}
+	mu                 sync.Mutex
+	containers         map[string]runtime.ContainerInfo
+	images             map[string]runtime.ImageInfo
+	allowUnknownImages bool
+	createErr          error
+	execResult         runtime.ExecResult
+	execErr            error
+	startErr           error
+	stopErr            error
+	removeErr          error
+	inspectErr         error
+	inspectImageErr    error
+	lastCreate         runtime.CreateOptions
+	lastExec           runtime.ExecOptions
+	startCalls         int
+	lastBuild          runtime.BuildOptions
+	buildResult        runtime.BuildResult
+	buildFiles         map[string]string
+	buildErr           error
+	buildStarted       chan struct{}
+	buildContinue      chan struct{}
 }
 
 func (f *fakeRuntime) Name() string { return "fake" }
@@ -2258,6 +2362,13 @@ func (f *fakeRuntime) InspectImage(_ context.Context, imageRef string) (runtime.
 	}
 	info, ok := f.images[imageRef]
 	if !ok {
+		if f.allowUnknownImages {
+			return runtime.ImageInfo{
+				ID:        "sha256:auto-" + imageRef,
+				Ref:       imageRef,
+				CreatedAt: time.Now().UTC(),
+			}, nil
+		}
 		return runtime.ImageInfo{}, runtime.ErrImageNotFound
 	}
 	return info, nil

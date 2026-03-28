@@ -116,6 +116,7 @@ type EnvironmentResponse struct {
 	ImageRepository       string              `json:"image_repository"`
 	ImageTag              string              `json:"image_tag"`
 	ImageRef              string              `json:"image_ref"`
+	Available             bool                `json:"available"`
 	DefaultCwd            string              `json:"default_cwd"`
 	DefaultEnv            map[string]string   `json:"default_env,omitempty"`
 	AgentPrompt           string              `json:"agent_prompt,omitempty"`

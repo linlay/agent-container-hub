@@ -27,6 +27,7 @@ const state = {
     selectedName: "",
     selectedBuild: defaultBuild(),
     selectedDetails: defaultEnvironmentDetails(),
+    selectedAvailable: false,
     selectedDefaultExecute: defaultExecutePreset(),
     selectedAgentPrompt: "",
     selectedAvailableBuildTargets: [],
@@ -78,6 +79,7 @@ function clearEnvironmentForm() {
   document.getElementById("default-execute-args").value = "";
   state.environments.selectedBuild = defaultBuild();
   state.environments.selectedDetails = defaultEnvironmentDetails();
+  state.environments.selectedAvailable = false;
   state.environments.selectedDefaultExecute = defaultExecutePreset();
   state.environments.selectedAgentPrompt = "";
   state.environments.selectedAvailableBuildTargets = [];
@@ -168,6 +170,23 @@ function normalizeExecutePreset(preset) {
     ...(preset || {}),
     args: Array.isArray(preset?.args) ? [...preset.args] : [],
   };
+}
+
+function formatAvailabilityLabel(item) {
+  return item?.available ? "available" : "missing image";
+}
+
+function availabilityClass(item) {
+  return item?.available ? "" : "stopped";
+}
+
+function environmentStatusSummary(item) {
+  const enabledLabel = item?.enabled ? "enabled" : "disabled";
+  const availabilityLabel = item?.available ? "image available locally" : "image missing locally";
+  if (item?.last_build) {
+    return `Last build ${formatBuildStatus(item.last_build.status)}${buildTargetSuffix(item.last_build.target)} at ${item.last_build.started_at || "-"} · ${enabledLabel} · ${availabilityLabel}.`;
+  }
+  return `Environment loaded. ${enabledLabel}. ${availabilityLabel}.`;
 }
 
 function normalizeBuildTargets(targets) {
@@ -291,10 +310,14 @@ function renderEnvironments() {
     <div class="list-item ${state.environments.selectedName === item.name ? "active" : ""}" data-environment-name="${escapeHTML(item.name)}">
       <div class="toolbar">
         <strong>${escapeHTML(item.name)}</strong>
-        <span class="pill ${item.enabled ? "" : "stopped"}">${item.enabled ? "enabled" : "disabled"}</span>
+        <div class="actions">
+          <span class="pill ${item.enabled ? "" : "stopped"}">${item.enabled ? "enabled" : "disabled"}</span>
+          <span class="pill ${availabilityClass(item)}">${escapeHTML(formatAvailabilityLabel(item))}</span>
+        </div>
       </div>
       <div class="meta">${escapeHTML(item.image_ref || "-")}</div>
       <div class="meta">${item.last_build ? `last build: ${escapeHTML(formatBuildStatus(item.last_build.status))}` : "no build yet"}</div>
+      <div class="meta">${item.available ? "image available locally" : "image missing locally"}</div>
     </div>
   `).join("") || `<div class="empty">No environments yet.</div>`;
 
@@ -320,6 +343,7 @@ async function selectEnvironment(name) {
   document.getElementById("description").value = item.description || "";
   state.environments.selectedBuild = normalizeBuild(item.build);
   state.environments.selectedDetails = normalizeEnvironmentDetails(item);
+  state.environments.selectedAvailable = Boolean(item.available);
   state.environments.selectedDefaultExecute = normalizeExecutePreset(item.default_execute);
   state.environments.selectedAgentPrompt = item.agent_prompt || "";
   state.environments.selectedLastBuild = normalizeBuildJob(item.last_build);
@@ -328,9 +352,7 @@ async function selectEnvironment(name) {
   document.getElementById("default-execute-timeout").value = state.environments.selectedDefaultExecute.timeout_ms || "";
   document.getElementById("default-execute-args").value = state.environments.selectedDefaultExecute.args.join("\n");
   state.environments.selectedAvailableBuildTargets = normalizeBuildTargets(item.available_build_targets);
-  environmentOutput.textContent = item.last_build
-    ? `Last build ${formatBuildStatus(item.last_build.status)}${buildTargetSuffix(item.last_build.target)} at ${item.last_build.started_at || "-"}`
-    : "Environment loaded.";
+  environmentOutput.textContent = environmentStatusSummary(item);
   environmentYAML.textContent = item.yaml || "No YAML available.";
   updateBuildButton();
   await refreshEnvironmentFiles(item.name, state.files.selectedPath || "environment.yml");
@@ -373,11 +395,14 @@ function syncBuildReference(job) {
   }
   state.environments.items = state.environments.items.map((item) => (
     item.name === job.environment_name
-      ? { ...item, last_build: normalizeBuildJob(job) }
+      ? { ...item, last_build: normalizeBuildJob(job), available: job.status === "succeeded" ? true : item.available }
       : item
   ));
   if (state.environments.selectedName === job.environment_name) {
     state.environments.selectedLastBuild = normalizeBuildJob(job);
+    if (job.status === "succeeded") {
+      state.environments.selectedAvailable = true;
+    }
     environmentOutput.textContent = `Build ${formatBuildStatus(job.status)}${buildTargetSuffix(job.target)} for ${job.environment_name} (${job.image_ref}).`;
     updateBuildButton();
   }
@@ -718,11 +743,12 @@ async function initialize() {
       });
       state.environments.selectedBuild = normalizeBuild(result.build);
       state.environments.selectedDetails = normalizeEnvironmentDetails(result);
+      state.environments.selectedAvailable = Boolean(result.available);
       state.environments.selectedDefaultExecute = normalizeExecutePreset(result.default_execute);
       state.environments.selectedAgentPrompt = result.agent_prompt || "";
       state.environments.selectedAvailableBuildTargets = normalizeBuildTargets(result.available_build_targets);
       state.environments.selectedLastBuild = normalizeBuildJob(result.last_build);
-      environmentOutput.textContent = "Environment saved.";
+      environmentOutput.textContent = environmentStatusSummary(result);
       environmentYAML.textContent = result.yaml || "No YAML available.";
       showToast(`Environment ${result.name} saved.`, "success");
       await refreshEnvironments(result.name);

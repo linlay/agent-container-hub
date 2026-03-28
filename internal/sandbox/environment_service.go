@@ -17,12 +17,13 @@ type EnvironmentService struct {
 	builds       interface {
 		LatestBuildJob(context.Context, string) (*api.BuildJobResponse, error)
 	}
-	logger *slog.Logger
+	runtime imageInspector
+	logger  *slog.Logger
 }
 
 func NewEnvironmentService(configRoot string, environments store.EnvironmentStore, builds interface {
 	LatestBuildJob(context.Context, string) (*api.BuildJobResponse, error)
-}, logger *slog.Logger) *EnvironmentService {
+}, imageRuntime imageInspector, logger *slog.Logger) *EnvironmentService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -30,6 +31,7 @@ func NewEnvironmentService(configRoot string, environments store.EnvironmentStor
 		environments: environments,
 		configRoot:   strings.TrimSpace(configRoot),
 		builds:       builds,
+		runtime:      imageRuntime,
 		logger:       logger,
 	}
 }
@@ -191,6 +193,11 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,
 	}
+	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef())
+	if err != nil {
+		return nil, err
+	}
+	response.Available = available
 	availableTargets, err := AvailableBuildTargets(s.configRoot, environment.Name)
 	if err != nil {
 		return nil, err
