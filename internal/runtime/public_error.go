@@ -73,11 +73,7 @@ func classifyCommandPublicMessage(image string, result commandResult) string {
 }
 
 func classifyImageNotFoundMessage(image, detail string) string {
-	lowerDetail := strings.ToLower(detail)
-	if !strings.Contains(lowerDetail, "unable to find image") &&
-		!strings.Contains(lowerDetail, "pull access denied") &&
-		!strings.Contains(lowerDetail, "repository does not exist") &&
-		!strings.Contains(lowerDetail, "manifest unknown") {
+	if !isImageNotFoundDetail(detail) {
 		return ""
 	}
 
@@ -92,4 +88,14 @@ func classifyImageNotFoundMessage(image, detail string) string {
 		return "container image not found"
 	}
 	return fmt.Sprintf("image %q not found", image)
+}
+
+func isImageNotFoundDetail(detail string) bool {
+	lowerDetail := strings.ToLower(detail)
+	return strings.Contains(lowerDetail, "unable to find image") ||
+		strings.Contains(lowerDetail, "pull access denied") ||
+		strings.Contains(lowerDetail, "repository does not exist") ||
+		strings.Contains(lowerDetail, "manifest unknown") ||
+		strings.Contains(lowerDetail, "no such image") ||
+		strings.Contains(lowerDetail, "image not known")
 }

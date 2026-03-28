@@ -495,6 +495,33 @@ label {
   box-shadow: inset 0 0 0 1px rgba(10, 107, 105, 0.18);
 }
 
+.build-target-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  cursor: pointer;
+}
+
+.build-target-option input {
+  width: auto;
+  margin: 2px 0 0;
+}
+
+.build-target-option.readonly {
+  grid-template-columns: minmax(0, 1fr);
+  cursor: default;
+}
+
+.build-target-copy {
+  display: grid;
+  gap: 6px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

@@ -13,13 +13,14 @@ import (
 
 type EnvironmentService struct {
 	environments store.EnvironmentStore
+	configRoot   string
 	builds       interface {
 		LatestBuildJob(context.Context, string) (*api.BuildJobResponse, error)
 	}
-	logger       *slog.Logger
+	logger *slog.Logger
 }
 
-func NewEnvironmentService(environments store.EnvironmentStore, builds interface {
+func NewEnvironmentService(configRoot string, environments store.EnvironmentStore, builds interface {
 	LatestBuildJob(context.Context, string) (*api.BuildJobResponse, error)
 }, logger *slog.Logger) *EnvironmentService {
 	if logger == nil {
@@ -27,6 +28,7 @@ func NewEnvironmentService(environments store.EnvironmentStore, builds interface
 	}
 	return &EnvironmentService{
 		environments: environments,
+		configRoot:   strings.TrimSpace(configRoot),
 		builds:       builds,
 		logger:       logger,
 	}
@@ -189,6 +191,11 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,
 	}
+	availableTargets, err := AvailableBuildTargets(s.configRoot, environment.Name)
+	if err != nil {
+		return nil, err
+	}
+	response.AvailableBuildTargets = append([]string(nil), availableTargets...)
 	latestBuild, err := s.builds.LatestBuildJob(ctx, environment.Name)
 	if err != nil {
 		return nil, err

@@ -1702,7 +1702,7 @@ func TestStartBuildJobReturnsImmediatelyAndTracksActiveStatus(t *testing.T) {
 	fake.buildContinue = make(chan struct{})
 	fake.buildResult.Output = "building...\n"
 
-	job, err := services.builds.StartBuildJob(context.Background(), "python")
+	job, err := services.builds.StartBuildJob(context.Background(), "python", api.BuildEnvironmentRequest{})
 	if err != nil {
 		t.Fatalf("StartBuildJob() error = %v", err)
 	}
@@ -1727,6 +1727,77 @@ func TestStartBuildJobReturnsImmediatelyAndTracksActiveStatus(t *testing.T) {
 	close(fake.buildContinue)
 }
 
+func TestStartBuildJobWithExplicitTargetUsesMakefile(t *testing.T) {
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "python",
+		ImageRepository: "python-custom",
+		ImageTag:        "3.11-cn",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM python:3.11\n",
+			BuildArgs: map[string]string{
+				"NPM_REGISTRY": "https://registry.npmmirror.com",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if _, err := services.environments.PutFile(context.Background(), "python", "Makefile", ".PHONY: build build-cn\nbuild:\n\t@echo standard\nbuild-cn:\n\t@echo cn\n"); err != nil {
+		t.Fatalf("PutFile(Makefile) error = %v", err)
+	}
+
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(binDir) error = %v", err)
+	}
+	makePath := filepath.Join(binDir, "make")
+	makeScript := "#!/bin/sh\n" +
+		"printf 'target=%s\\n' \"$1\"\n" +
+		"printf 'IMAGE_NAME=%s\\n' \"$IMAGE_NAME\"\n" +
+		"printf 'TAG=%s\\n' \"$TAG\"\n" +
+		"printf 'NPM_REGISTRY=%s\\n' \"$NPM_REGISTRY\"\n"
+	if err := os.WriteFile(makePath, []byte(makeScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(make) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	started, err := services.builds.StartBuildJob(context.Background(), "python", api.BuildEnvironmentRequest{Target: BuildTargetCN})
+	if err != nil {
+		t.Fatalf("StartBuildJob() error = %v", err)
+	}
+	if started.Target != BuildTargetCN {
+		t.Fatalf("StartBuildJob() target = %q, want %q", started.Target, BuildTargetCN)
+	}
+
+	var persisted *api.BuildJobResponse
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		persisted, err = services.builds.GetBuildJob(context.Background(), started.ID)
+		if err != nil {
+			t.Fatalf("GetBuildJob() error = %v", err)
+		}
+		if persisted.Status != string(model.BuildJobStatusBuilding) && persisted.Status != string(model.BuildJobStatusSmokeChecking) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if persisted == nil || persisted.Status != string(model.BuildJobStatusSucceeded) {
+		t.Fatalf("persisted = %+v, want succeeded build job", persisted)
+	}
+	if persisted.Target != BuildTargetCN {
+		t.Fatalf("persisted.Target = %q, want %q", persisted.Target, BuildTargetCN)
+	}
+	if !strings.Contains(persisted.Output, "target=build-cn") || !strings.Contains(persisted.Output, "IMAGE_NAME=python-custom") || !strings.Contains(persisted.Output, "TAG=3.11-cn") || !strings.Contains(persisted.Output, "NPM_REGISTRY=https://registry.npmmirror.com") {
+		t.Fatalf("persisted.Output = %q, want make output with env overrides", persisted.Output)
+	}
+	if fake.lastBuild.Image != "" {
+		t.Fatalf("runtime Build should not run for make-based build, got %+v", fake.lastBuild)
+	}
+}
+
 func TestSubscribeBuildJobStreamsLogsAndCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -1749,7 +1820,7 @@ func TestSubscribeBuildJobStreamsLogsAndCompletion(t *testing.T) {
 	fake.buildContinue = make(chan struct{})
 	fake.buildResult.Output = "layer 1\nlayer 2\n"
 
-	started, err := services.builds.StartBuildJob(context.Background(), "python")
+	started, err := services.builds.StartBuildJob(context.Background(), "python", api.BuildEnvironmentRequest{})
 	if err != nil {
 		t.Fatalf("StartBuildJob() error = %v", err)
 	}
@@ -1800,6 +1871,142 @@ func TestSubscribeBuildJobStreamsLogsAndCompletion(t *testing.T) {
 	}
 	if persisted.Output != "layer 1\nlayer 2\n" {
 		t.Fatalf("persisted.Output = %q, want build output", persisted.Output)
+	}
+}
+
+func TestReconcileExistingImagesCreatesSucceededBuildForHostImage(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	fake.images["daily-office:latest"] = runtime.ImageInfo{
+		ID:        "sha256:daily-office",
+		Ref:       "daily-office:latest",
+		CreatedAt: time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC),
+	}
+
+	if err := services.builds.ReconcileExistingImages(context.Background()); err != nil {
+		t.Fatalf("ReconcileExistingImages() error = %v", err)
+	}
+
+	latest, err := services.builds.LatestBuildJob(context.Background(), "daily-office")
+	if err != nil {
+		t.Fatalf("LatestBuildJob() error = %v", err)
+	}
+	if latest == nil {
+		t.Fatal("LatestBuildJob() = nil, want imported build job")
+	}
+	if latest.Status != string(model.BuildJobStatusSucceeded) {
+		t.Fatalf("LatestBuildJob() status = %q, want succeeded", latest.Status)
+	}
+	if latest.ImageRef != "daily-office:latest" {
+		t.Fatalf("LatestBuildJob() image = %q, want daily-office:latest", latest.ImageRef)
+	}
+	if latest.Output != discoveredImageBuildOutput {
+		t.Fatalf("LatestBuildJob() output = %q, want %q", latest.Output, discoveredImageBuildOutput)
+	}
+	expectedCreatedAt := time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC)
+	if !latest.StartedAt.Equal(expectedCreatedAt) || !latest.FinishedAt.Equal(expectedCreatedAt) {
+		t.Fatalf("LatestBuildJob() timestamps = (%s, %s), want %s", latest.StartedAt, latest.FinishedAt, expectedCreatedAt)
+	}
+}
+
+func TestReconcileExistingImagesDoesNotDuplicateCurrentImageRecord(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	fake.images["daily-office:latest"] = runtime.ImageInfo{
+		ID:        "sha256:daily-office",
+		Ref:       "daily-office:latest",
+		CreatedAt: time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC),
+	}
+
+	if err := services.builds.ReconcileExistingImages(context.Background()); err != nil {
+		t.Fatalf("first ReconcileExistingImages() error = %v", err)
+	}
+	if err := services.builds.ReconcileExistingImages(context.Background()); err != nil {
+		t.Fatalf("second ReconcileExistingImages() error = %v", err)
+	}
+
+	jobs, err := services.store.ListBuildJobs(context.Background(), "daily-office")
+	if err != nil {
+		t.Fatalf("ListBuildJobs() error = %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListBuildJobs() len = %d, want 1", len(jobs))
+	}
+}
+
+func TestReconcileExistingImagesCreatesRecordWhenEnvironmentMovesToNewImageRef(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	initial := api.UpsertEnvironmentRequest{
+		Name:            "daily-office",
+		ImageRepository: "daily-office",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}
+	if _, err := services.environments.Upsert(context.Background(), initial); err != nil {
+		t.Fatalf("Upsert(initial) error = %v", err)
+	}
+	if _, err := services.builds.BuildEnvironment(context.Background(), "daily-office"); err != nil {
+		t.Fatalf("BuildEnvironment() error = %v", err)
+	}
+
+	initial.ImageTag = "v2"
+	if _, err := services.environments.Upsert(context.Background(), initial); err != nil {
+		t.Fatalf("Upsert(updated) error = %v", err)
+	}
+	fake.images["daily-office:v2"] = runtime.ImageInfo{
+		ID:        "sha256:daily-office-v2",
+		Ref:       "daily-office:v2",
+		CreatedAt: time.Now().UTC().Add(time.Minute),
+	}
+
+	if err := services.builds.ReconcileExistingImages(context.Background()); err != nil {
+		t.Fatalf("ReconcileExistingImages() error = %v", err)
+	}
+
+	latest, err := services.builds.LatestBuildJob(context.Background(), "daily-office")
+	if err != nil {
+		t.Fatalf("LatestBuildJob() error = %v", err)
+	}
+	if latest == nil || latest.ImageRef != "daily-office:v2" {
+		t.Fatalf("LatestBuildJob() = %+v, want daily-office:v2", latest)
+	}
+	if latest.Output != discoveredImageBuildOutput {
+		t.Fatalf("LatestBuildJob() output = %q, want imported marker", latest.Output)
 	}
 }
 
@@ -1856,7 +2063,10 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 	if err != nil {
 		t.Fatalf("store.OpenFileEnvironmentStore() error = %v", err)
 	}
-	fake := &fakeRuntime{containers: make(map[string]runtime.ContainerInfo)}
+	fake := &fakeRuntime{
+		containers: make(map[string]runtime.ContainerInfo),
+		images:     make(map[string]runtime.ImageInfo),
+	}
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -1865,30 +2075,32 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 		store:        st,
 		envs:         envs,
 		sessions:     NewSessionService(cfg, st, envs, fake, logger),
-		environments: NewEnvironmentService(envs, builds, logger),
+		environments: NewEnvironmentService(cfg.ConfigRoot, envs, builds, logger),
 		builds:       builds,
 	}, func() { _ = st.Close() }, fake
 }
 
 type fakeRuntime struct {
-	mu            sync.Mutex
-	containers    map[string]runtime.ContainerInfo
-	createErr     error
-	execResult    runtime.ExecResult
-	execErr       error
-	startErr      error
-	stopErr       error
-	removeErr     error
-	inspectErr    error
-	lastCreate    runtime.CreateOptions
-	lastExec      runtime.ExecOptions
-	startCalls    int
-	lastBuild     runtime.BuildOptions
-	buildResult   runtime.BuildResult
-	buildFiles    map[string]string
-	buildErr      error
-	buildStarted  chan struct{}
-	buildContinue chan struct{}
+	mu              sync.Mutex
+	containers      map[string]runtime.ContainerInfo
+	images          map[string]runtime.ImageInfo
+	createErr       error
+	execResult      runtime.ExecResult
+	execErr         error
+	startErr        error
+	stopErr         error
+	removeErr       error
+	inspectErr      error
+	inspectImageErr error
+	lastCreate      runtime.CreateOptions
+	lastExec        runtime.ExecOptions
+	startCalls      int
+	lastBuild       runtime.BuildOptions
+	buildResult     runtime.BuildResult
+	buildFiles      map[string]string
+	buildErr        error
+	buildStarted    chan struct{}
+	buildContinue   chan struct{}
 }
 
 func (f *fakeRuntime) Name() string { return "fake" }
@@ -2034,6 +2246,19 @@ func (f *fakeRuntime) Inspect(_ context.Context, containerID string) (runtime.Co
 	info, ok := f.lookup(containerID)
 	if !ok {
 		return runtime.ContainerInfo{}, runtime.ErrContainerNotFound
+	}
+	return info, nil
+}
+
+func (f *fakeRuntime) InspectImage(_ context.Context, imageRef string) (runtime.ImageInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.inspectImageErr != nil {
+		return runtime.ImageInfo{}, f.inspectImageErr
+	}
+	info, ok := f.images[imageRef]
+	if !ok {
+		return runtime.ImageInfo{}, runtime.ErrImageNotFound
 	}
 	return info, nil
 }

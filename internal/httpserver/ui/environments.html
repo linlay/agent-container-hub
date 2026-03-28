@@ -132,6 +132,28 @@
   </main>
   <div class="toast-container" id="toast-container"></div>
 
+  <div class="modal-backdrop" id="build-target-backdrop">
+    <div class="modal narrow">
+      <div class="modal-header">
+        <div>
+          <h2>Select Build Target</h2>
+          <div class="meta">Choose which build target to run before starting the image build.</div>
+        </div>
+        <button class="secondary modal-close" data-close-modal="build-target-backdrop">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="stack">
+          <div class="meta" id="build-target-meta">Choose a build target.</div>
+          <div class="stack" id="build-target-options"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" data-close-modal="build-target-backdrop">Cancel</button>
+        <button id="build-target-confirm">Start Build</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="build-progress-backdrop">
     <div class="modal">
       <div class="modal-header">

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,6 +198,83 @@ func TestListSessionsReturnsAllActivePages(t *testing.T) {
 	}
 	if len(items) != 135 {
 		t.Fatalf("ListSessions() len = %d, want 135", len(items))
+	}
+}
+
+func TestSaveBuildJobPersistsTarget(t *testing.T) {
+	t.Parallel()
+
+	st, cleanup := newSQLiteStore(t)
+	defer cleanup()
+
+	now := time.Date(2026, time.March, 18, 10, 0, 0, 0, time.UTC)
+	job := &model.BuildJob{
+		ID:              "build-1",
+		EnvironmentName: "daily-office",
+		ImageRef:        "daily-office:latest",
+		Target:          "build-cn",
+		Status:          model.BuildJobStatusSucceeded,
+		Output:          "ok",
+		StartedAt:       now,
+		FinishedAt:      now.Add(time.Minute),
+	}
+	if err := st.SaveBuildJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveBuildJob() error = %v", err)
+	}
+
+	stored, err := st.GetBuildJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetBuildJob() error = %v", err)
+	}
+	if stored.Target != "build-cn" {
+		t.Fatalf("stored.Target = %q, want build-cn", stored.Target)
+	}
+}
+
+func TestOpenMigratesBuildJobTargetColumn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.db")
+	legacyDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = legacyDB.Close() })
+
+	if _, err := legacyDB.Exec(`
+		CREATE TABLE build_jobs (
+			id TEXT PRIMARY KEY,
+			environment_name TEXT NOT NULL,
+			image_ref TEXT NOT NULL,
+			status TEXT NOT NULL,
+			output TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			started_at TEXT NOT NULL,
+			finished_at TEXT NOT NULL
+		);
+	`); err != nil {
+		t.Fatalf("Exec(create legacy build_jobs) error = %v", err)
+	}
+	if _, err := legacyDB.Exec(`
+		INSERT INTO build_jobs (id, environment_name, image_ref, status, output, error, started_at, finished_at)
+		VALUES ('build-legacy', 'shell', 'busybox:latest', 'succeeded', 'ok', '', '2026-03-18T10:00:00Z', '2026-03-18T10:01:00Z');
+	`); err != nil {
+		t.Fatalf("Exec(insert legacy build job) error = %v", err)
+	}
+	_ = legacyDB.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	job, err := st.GetBuildJob(context.Background(), "build-legacy")
+	if err != nil {
+		t.Fatalf("GetBuildJob() error = %v", err)
+	}
+	if job.Target != "" {
+		t.Fatalf("job.Target = %q, want empty string for migrated legacy row", job.Target)
 	}
 }
 

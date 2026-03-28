@@ -52,12 +52,15 @@ func main() {
 
 	sessionService := sandbox.NewSessionService(cfg, appStore, environmentStore, provider, logger)
 	buildService := sandbox.NewBuildService(cfg, appStore, environmentStore, provider, logger)
-	environmentService := sandbox.NewEnvironmentService(environmentStore, buildService, logger)
+	environmentService := sandbox.NewEnvironmentService(cfg.ConfigRoot, environmentStore, buildService, logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if err := sessionService.Reconcile(ctx); err != nil {
 		logger.Error("reconcile failed", "error", err)
+	}
+	if err := buildService.ReconcileExistingImages(ctx); err != nil {
+		logger.Error("reconcile existing images failed", "error", err)
 	}
 
 	server := &http.Server{

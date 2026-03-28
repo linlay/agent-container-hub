@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -46,7 +47,7 @@ type EnvironmentService interface {
 }
 
 type BuildService interface {
-	StartBuildJob(context.Context, string) (*api.BuildJobResponse, error)
+	StartBuildJob(context.Context, string, api.BuildEnvironmentRequest) (*api.BuildJobResponse, error)
 	GetBuildJob(context.Context, string) (*api.BuildJobResponse, error)
 	SubscribeBuildJob(context.Context, string) (*api.BuildJobResponse, <-chan sandbox.BuildEvent, func(), error)
 }
@@ -452,7 +453,15 @@ func (s *Server) handleUpsertEnvironment(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleStartBuildJob(w http.ResponseWriter, r *http.Request) {
-	response, err := s.builds.StartBuildJob(r.Context(), r.PathValue("name"))
+	var req api.BuildEnvironmentRequest
+	if r.Body != nil {
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	response, err := s.builds.StartBuildJob(r.Context(), r.PathValue("name"), req)
 	if err != nil {
 		s.writeMappedError(w, err)
 		return

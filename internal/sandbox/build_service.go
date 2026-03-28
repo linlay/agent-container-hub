@@ -1,12 +1,16 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,11 +23,19 @@ import (
 )
 
 const (
-	BuildEventSnapshot = "snapshot"
-	BuildEventStatus   = "status"
-	BuildEventLog      = "log"
-	BuildEventComplete = "complete"
+	BuildEventSnapshot         = "snapshot"
+	BuildEventStatus           = "status"
+	BuildEventLog              = "log"
+	BuildEventComplete         = "complete"
+	discoveredImageBuildOutput = "discovered existing host image during startup sync"
+	BuildTargetDefault         = "build"
+	BuildTargetCN              = "build-cn"
 )
+
+var makeTargetPatterns = map[string]*regexp.Regexp{
+	BuildTargetDefault: regexp.MustCompile(`(?m)^build\s*:(?:$|\s)`),
+	BuildTargetCN:      regexp.MustCompile(`(?m)^build-cn\s*:(?:$|\s)`),
+}
 
 type BuildEvent struct {
 	Type  string
@@ -78,9 +90,14 @@ func NewBuildService(cfg config.Config, st store.BuildJobStore, envs store.Envir
 	}
 }
 
-func (s *BuildService) StartBuildJob(ctx context.Context, name string) (*api.BuildJobResponse, error) {
+func (s *BuildService) StartBuildJob(ctx context.Context, name string, req api.BuildEnvironmentRequest) (*api.BuildJobResponse, error) {
 	environment, release, err := s.prepareBuild(ctx, name)
 	if err != nil {
+		return nil, err
+	}
+	target, useMake, err := s.resolveBuildTarget(environment.Name, req.Target)
+	if err != nil {
+		release()
 		return nil, err
 	}
 
@@ -93,21 +110,9 @@ func (s *BuildService) StartBuildJob(ctx context.Context, name string) (*api.Bui
 		ID:              "build-" + jobID,
 		EnvironmentName: environment.Name,
 		ImageRef:        environment.ImageRef(),
+		Target:          target,
 		Status:          model.BuildJobStatusBuilding,
 		StartedAt:       time.Now().UTC(),
-	}
-
-	buildDir := filepath.Join(s.cfg.BuildRoot, job.ID)
-	if err := os.MkdirAll(buildDir, 0o755); err != nil {
-		release()
-		return nil, fmt.Errorf("create build dir: %w", err)
-	}
-
-	dockerfilePath := filepath.Join(buildDir, "Dockerfile")
-	if err := os.WriteFile(dockerfilePath, []byte(environment.Build.Dockerfile), 0o644); err != nil {
-		release()
-		_ = os.RemoveAll(buildDir)
-		return nil, fmt.Errorf("write dockerfile: %w", err)
 	}
 
 	active := &activeBuildJob{
@@ -117,12 +122,32 @@ func (s *BuildService) StartBuildJob(ctx context.Context, name string) (*api.Bui
 	}
 	s.registerActiveJob(active)
 
-	go s.runBuildJob(context.Background(), active, environment.Clone(), buildDir, dockerfilePath)
+	if useMake {
+		go s.runMakeBuildJob(context.Background(), active, environment.Clone(), s.environmentConfigDir(environment.Name), target)
+		return buildJobToResponse(job), nil
+	}
+
+	buildDir := filepath.Join(s.cfg.BuildRoot, job.ID)
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		s.unregisterActiveJob(job.ID, environment.Name)
+		release()
+		return nil, fmt.Errorf("create build dir: %w", err)
+	}
+
+	dockerfilePath := filepath.Join(buildDir, "Dockerfile")
+	if err := os.WriteFile(dockerfilePath, []byte(environment.Build.Dockerfile), 0o644); err != nil {
+		s.unregisterActiveJob(job.ID, environment.Name)
+		release()
+		_ = os.RemoveAll(buildDir)
+		return nil, fmt.Errorf("write dockerfile: %w", err)
+	}
+
+	go s.runDirectBuildJob(context.Background(), active, environment.Clone(), buildDir, dockerfilePath)
 	return buildJobToResponse(job), nil
 }
 
 func (s *BuildService) BuildEnvironment(ctx context.Context, name string) (*api.BuildJobResponse, error) {
-	started, err := s.StartBuildJob(ctx, name)
+	started, err := s.StartBuildJob(ctx, name, api.BuildEnvironmentRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +203,26 @@ func (s *BuildService) LatestBuildJob(ctx context.Context, environmentName strin
 	return buildJobToResponse(jobs[0]), nil
 }
 
+func (s *BuildService) ReconcileExistingImages(ctx context.Context) error {
+	environments, err := s.envs.ListEnvironments(ctx)
+	if err != nil {
+		return err
+	}
+	for _, environment := range environments {
+		if environment == nil {
+			continue
+		}
+		if err := s.reconcileEnvironmentImage(ctx, environment); err != nil {
+			s.logger.Error("reconcile environment image failed",
+				"environment", environment.Name,
+				"image", environment.ImageRef(),
+				"error", err,
+			)
+		}
+	}
+	return nil
+}
+
 func (s *BuildService) SubscribeBuildJob(_ context.Context, id string) (*api.BuildJobResponse, <-chan BuildEvent, func(), error) {
 	if active := s.getActiveJob(id); active != nil {
 		return active.subscribe()
@@ -188,6 +233,56 @@ func (s *BuildService) SubscribeBuildJob(_ context.Context, id string) (*api.Bui
 	}
 	cancel := func() {}
 	return buildJobToResponse(job), nil, cancel, nil
+}
+
+func (s *BuildService) reconcileEnvironmentImage(ctx context.Context, environment *model.Environment) error {
+	imageRef := environment.ImageRef()
+	if imageRef == "" {
+		return nil
+	}
+	image, err := s.runtime.InspectImage(ctx, imageRef)
+	if err != nil {
+		if errors.Is(err, runtime.ErrImageNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	latest, err := s.LatestBuildJob(ctx, environment.Name)
+	if err != nil {
+		return err
+	}
+	if latest != nil && latest.ImageRef == imageRef {
+		return nil
+	}
+
+	jobID, err := generateID()
+	if err != nil {
+		return err
+	}
+	createdAt := image.CreatedAt.UTC()
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	job := &model.BuildJob{
+		ID:              "build-" + jobID,
+		EnvironmentName: environment.Name,
+		ImageRef:        imageRef,
+		Status:          model.BuildJobStatusSucceeded,
+		Output:          discoveredImageBuildOutput,
+		StartedAt:       createdAt,
+		FinishedAt:      createdAt,
+	}
+	if err := s.store.SaveBuildJob(ctx, job); err != nil {
+		return err
+	}
+	s.logger.Info("reconciled existing host image",
+		"environment", environment.Name,
+		"image", imageRef,
+		"image_id", image.ID,
+		"build_job_id", job.ID,
+	)
+	return nil
 }
 
 func (s *BuildService) prepareBuild(ctx context.Context, name string) (*model.Environment, func(), error) {
@@ -212,7 +307,7 @@ func (s *BuildService) prepareBuild(ctx context.Context, name string) (*model.En
 	return environment, release, nil
 }
 
-func (s *BuildService) runBuildJob(ctx context.Context, active *activeBuildJob, environment *model.Environment, buildDir string, dockerfilePath string) {
+func (s *BuildService) runDirectBuildJob(ctx context.Context, active *activeBuildJob, environment *model.Environment, buildDir string, dockerfilePath string) {
 	defer os.RemoveAll(buildDir)
 
 	result, err := s.runtime.Build(ctx, runtime.BuildOptions{
@@ -256,11 +351,58 @@ func (s *BuildService) runBuildJob(ctx context.Context, active *activeBuildJob, 
 	s.finishBuildJob(active, model.BuildJobStatusSucceeded, "", time.Now().UTC())
 }
 
+func (s *BuildService) runMakeBuildJob(ctx context.Context, active *activeBuildJob, environment *model.Environment, workingDir, target string) {
+	result, err := s.runMakeBuild(ctx, environment, workingDir, target, buildOutputSink{write: func(chunk string) {
+		s.appendBuildOutput(active, chunk)
+	}})
+	if result.Output != "" {
+		s.setBuildOutput(active, result.Output)
+	}
+	if err != nil {
+		s.logger.Error("environment make build failed",
+			"environment", environment.Name,
+			"image", environment.ImageRef(),
+			"target", target,
+			"build_job_id", active.job.ID,
+			"error", err,
+		)
+		s.finishBuildJob(active, model.BuildJobStatusFailed, err.Error(), result.FinishedAt)
+		return
+	}
+
+	if strings.TrimSpace(environment.Build.SmokeCommand) != "" {
+		s.setBuildStatus(active, model.BuildJobStatusSmokeChecking)
+		if smokeErr := s.runSmokeCheck(ctx, environment); smokeErr != nil {
+			s.logger.Error("environment smoke check failed",
+				"environment", environment.Name,
+				"image", environment.ImageRef(),
+				"target", target,
+				"build_job_id", active.job.ID,
+				"error", smokeErr,
+			)
+			s.finishBuildJob(active, model.BuildJobStatusFailed, smokeErr.Error(), time.Now().UTC())
+			return
+		}
+	}
+
+	s.logger.Info("environment built", "environment", environment.Name, "image", environment.ImageRef(), "target", target)
+	s.finishBuildJob(active, model.BuildJobStatusSucceeded, "", time.Now().UTC())
+}
+
 func (s *BuildService) registerActiveJob(active *activeBuildJob) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.activeJobs[active.job.ID] = active
 	s.activeJobsByEnv[active.job.EnvironmentName] = active.job.ID
+}
+
+func (s *BuildService) unregisterActiveJob(jobID, environmentName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.activeJobs, strings.TrimSpace(jobID))
+	if s.activeJobsByEnv[strings.TrimSpace(environmentName)] == strings.TrimSpace(jobID) {
+		delete(s.activeJobsByEnv, strings.TrimSpace(environmentName))
+	}
 }
 
 func (s *BuildService) getActiveJob(id string) *activeBuildJob {
@@ -376,6 +518,105 @@ func (s *BuildService) runSmokeCheck(ctx context.Context, environment *model.Env
 	return nil
 }
 
+func (s *BuildService) resolveBuildTarget(environmentName, requestedTarget string) (string, bool, error) {
+	availableTargets, err := discoverAvailableBuildTargets(s.environmentConfigDir(environmentName))
+	if err != nil {
+		return "", false, err
+	}
+	requestedTarget = strings.TrimSpace(requestedTarget)
+	if requestedTarget == "" {
+		if containsString(availableTargets, BuildTargetDefault) {
+			return BuildTargetDefault, true, nil
+		}
+		return "", false, nil
+	}
+	if !isSupportedBuildTarget(requestedTarget) {
+		return "", false, fmt.Errorf("%w: unsupported build target %q", ErrValidation, requestedTarget)
+	}
+	if !containsString(availableTargets, requestedTarget) {
+		return "", false, fmt.Errorf("%w: build target %q is not available for environment %q", ErrValidation, requestedTarget, environmentName)
+	}
+	return requestedTarget, true, nil
+}
+
+func (s *BuildService) environmentConfigDir(name string) string {
+	return filepath.Join(s.cfg.ConfigRoot, "environments", strings.TrimSpace(name))
+}
+
+func (s *BuildService) runMakeBuild(ctx context.Context, environment *model.Environment, workingDir, target string, outputSink io.Writer) (runtime.BuildResult, error) {
+	startedAt := time.Now().UTC()
+	cmd := exec.CommandContext(ctx, "make", target)
+	cmd.Dir = workingDir
+	cmd.Env = buildCommandEnv(environment)
+
+	var output bytes.Buffer
+	writer := io.MultiWriter(&output, outputSink)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+
+	err := cmd.Run()
+	finishedAt := time.Now().UTC()
+	result := runtime.BuildResult{
+		Output:     strings.TrimSpace(output.String()),
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	}
+	if err != nil {
+		return result, fmt.Errorf("run make %s: %w", target, err)
+	}
+	return result, nil
+}
+
+func buildCommandEnv(environment *model.Environment) []string {
+	env := append([]string(nil), os.Environ()...)
+	env = append(env, "IMAGE_NAME="+strings.TrimSpace(environment.ImageRepository))
+	env = append(env, "TAG="+strings.TrimSpace(environment.ImageTag))
+	for key, value := range environment.Build.BuildArgs {
+		env = append(env, key+"="+value)
+	}
+	return env
+}
+
+func AvailableBuildTargets(configRoot, environmentName string) ([]string, error) {
+	return discoverAvailableBuildTargets(filepath.Join(configRoot, "environments", strings.TrimSpace(environmentName)))
+}
+
+func discoverAvailableBuildTargets(environmentDir string) ([]string, error) {
+	payload, err := os.ReadFile(filepath.Join(environmentDir, "Makefile"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read environment Makefile: %w", err)
+	}
+	content := string(payload)
+	targets := make([]string, 0, len(makeTargetPatterns))
+	for _, target := range []string{BuildTargetDefault, BuildTargetCN} {
+		if makeTargetPatterns[target].MatchString(content) {
+			targets = append(targets, target)
+		}
+	}
+	return targets, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func isSupportedBuildTarget(target string) bool {
+	switch target {
+	case BuildTargetDefault, BuildTargetCN:
+		return true
+	default:
+		return false
+	}
+}
+
 func (j *activeBuildJob) snapshot() *api.BuildJobResponse {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
@@ -452,6 +693,7 @@ func buildJobToResponse(job *model.BuildJob) *api.BuildJobResponse {
 		ID:              job.ID,
 		EnvironmentName: job.EnvironmentName,
 		ImageRef:        job.ImageRef,
+		Target:          job.Target,
 		Status:          string(job.Status),
 		Output:          job.Output,
 		Error:           job.Error,
@@ -465,6 +707,7 @@ func responseToBuildJob(response *api.BuildJobResponse) *model.BuildJob {
 		ID:              response.ID,
 		EnvironmentName: response.EnvironmentName,
 		ImageRef:        response.ImageRef,
+		Target:          response.Target,
 		Status:          model.BuildJobStatus(response.Status),
 		Output:          response.Output,
 		Error:           response.Error,

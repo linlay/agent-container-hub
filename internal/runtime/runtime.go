@@ -14,6 +14,7 @@ var (
 	ErrContainerExists     = errors.New("container already exists")
 	ErrContainerNotRunning = errors.New("container not running")
 	ErrRuntimeUnavailable  = errors.New("runtime unavailable")
+	ErrImageNotFound       = errors.New("image not found")
 )
 
 const (
@@ -39,6 +40,12 @@ type ContainerInfo struct {
 	Image     string
 	State     ContainerState
 	Labels    map[string]string
+	CreatedAt time.Time
+}
+
+type ImageInfo struct {
+	ID        string
+	Ref       string
 	CreatedAt time.Time
 }
 
@@ -91,5 +98,6 @@ type Provider interface {
 	Stop(context.Context, string, time.Duration) error
 	Remove(context.Context, string) error
 	Inspect(context.Context, string) (ContainerInfo, error)
+	InspectImage(context.Context, string) (ImageInfo, error)
 	ListByLabel(context.Context, string, string) ([]ContainerInfo, error)
 }

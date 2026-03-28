@@ -928,6 +928,71 @@ func TestStartBuildJobReturnsConflictWhenEnvironmentAlreadyBuilding(t *testing.T
 	}
 }
 
+func TestStartBuildJobWithTargetRunsMakefileTarget(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(binDir) error = %v", err)
+	}
+	makePath := filepath.Join(binDir, "make")
+	makeScript := "#!/bin/sh\n" +
+		"printf 'target=%s\\n' \"$1\"\n" +
+		"printf 'IMAGE_NAME=%s\\n' \"$IMAGE_NAME\"\n" +
+		"printf 'TAG=%s\\n' \"$TAG\"\n" +
+		"printf 'NPM_REGISTRY=%s\\n' \"$NPM_REGISTRY\"\n"
+	if err := os.WriteFile(makePath, []byte(makeScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(make) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	handler, _, _ := newTestHandlerWithRuntime(t, "")
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "shell",
+		ImageRepository: "custom-shell",
+		ImageTag:        "v2",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+			BuildArgs: map[string]string{
+				"NPM_REGISTRY": "https://registry.npmmirror.com",
+			},
+		},
+	}, http.StatusOK, "")
+	_ = doJSON[api.EnvironmentFileResponse](t, handler, http.MethodPut, "/api/environments/shell/files/Makefile", api.PutEnvironmentFileRequest{
+		Content: ".PHONY: build build-cn\nbuild:\n\t@echo standard\nbuild-cn:\n\t@echo cn\n",
+	}, http.StatusOK, "")
+
+	environment := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/shell", nil, http.StatusOK, "")
+	if !containsString(environment.AvailableBuildTargets, "build") || !containsString(environment.AvailableBuildTargets, "build-cn") {
+		t.Fatalf("available_build_targets = %+v, want build and build-cn", environment.AvailableBuildTargets)
+	}
+
+	started := doJSON[api.BuildJobResponse](t, handler, http.MethodPost, "/api/environments/shell/build-jobs", api.BuildEnvironmentRequest{
+		Target: "build-cn",
+	}, http.StatusOK, "")
+	if started.Target != "build-cn" {
+		t.Fatalf("started.Target = %q, want build-cn", started.Target)
+	}
+
+	var persisted api.BuildJobResponse
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		persisted = doJSON[api.BuildJobResponse](t, handler, http.MethodGet, "/api/build-jobs/"+started.ID, nil, http.StatusOK, "")
+		if persisted.Status != string(model.BuildJobStatusBuilding) && persisted.Status != string(model.BuildJobStatusSmokeChecking) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if persisted.Status != string(model.BuildJobStatusSucceeded) {
+		t.Fatalf("persisted.Status = %q, want succeeded", persisted.Status)
+	}
+	if persisted.Target != "build-cn" {
+		t.Fatalf("persisted.Target = %q, want build-cn", persisted.Target)
+	}
+	if !strings.Contains(persisted.Output, "target=build-cn") || !strings.Contains(persisted.Output, "IMAGE_NAME=custom-shell") || !strings.Contains(persisted.Output, "TAG=v2") || !strings.Contains(persisted.Output, "NPM_REGISTRY=https://registry.npmmirror.com") {
+		t.Fatalf("persisted.Output = %q, want make target/env output", persisted.Output)
+	}
+}
+
 func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	t.Parallel()
 
@@ -944,6 +1009,9 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 			found = true
 			if env.ImageRef != "daily-office:latest" {
 				t.Fatalf("daily-office image_ref = %q, want daily-office:latest", env.ImageRef)
+			}
+			if !containsString(env.AvailableBuildTargets, "build") || !containsString(env.AvailableBuildTargets, "build-cn") {
+				t.Fatalf("daily-office available_build_targets = %+v, want build and build-cn", env.AvailableBuildTargets)
 			}
 		}
 	}
@@ -972,6 +1040,9 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	}
 	if len(dailyOffice.Build.SmokeArgs) == 0 {
 		t.Fatalf("daily-office smoke args = %+v, want cli/python/node checks", dailyOffice.Build.SmokeArgs)
+	}
+	if !containsString(dailyOffice.AvailableBuildTargets, "build") || !containsString(dailyOffice.AvailableBuildTargets, "build-cn") {
+		t.Fatalf("daily-office available_build_targets = %+v, want build and build-cn", dailyOffice.AvailableBuildTargets)
 	}
 	smokeScript := []byte(dailyOffice.Build.SmokeArgs[len(dailyOffice.Build.SmokeArgs)-1])
 	if !bytes.Contains(smokeScript, []byte("command -v himalaya")) || !bytes.Contains(smokeScript, []byte("command -v dbx")) || !bytes.Contains(smokeScript, []byte("command -v httpx")) || !bytes.Contains(smokeScript, []byte("python -c")) || !bytes.Contains(smokeScript, []byte("node -e")) {
@@ -1006,6 +1077,9 @@ func TestBuiltinDailyOfficeProEnvironmentIsListed(t *testing.T) {
 			found = true
 			if env.ImageRef != "daily-office-pro:latest" {
 				t.Fatalf("daily-office-pro image_ref = %q, want daily-office-pro:latest", env.ImageRef)
+			}
+			if !containsString(env.AvailableBuildTargets, "build") || !containsString(env.AvailableBuildTargets, "build-cn") {
+				t.Fatalf("daily-office-pro available_build_targets = %+v, want build and build-cn", env.AvailableBuildTargets)
 			}
 		}
 	}
@@ -1194,6 +1268,7 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 
 	fake := &httpFakeRuntime{
 		containers: make(map[string]runtime.ContainerInfo),
+		images:     make(map[string]runtime.ImageInfo),
 		execResult: runtime.ExecResult{
 			ExitCode:   0,
 			Stdout:     "ok",
@@ -1209,7 +1284,7 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 	serviceLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sessionService := sandbox.NewSessionService(cfg, st, envs, fake, serviceLogger)
 	buildService := sandbox.NewBuildService(cfg, st, envs, fake, serviceLogger)
-	environmentService := sandbox.NewEnvironmentService(envs, buildService, serviceLogger)
+	environmentService := sandbox.NewEnvironmentService(cfg.ConfigRoot, envs, buildService, serviceLogger)
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -1226,6 +1301,7 @@ func repoRootFromPackageDir() (string, error) {
 
 type httpFakeRuntime struct {
 	containers    map[string]runtime.ContainerInfo
+	images        map[string]runtime.ImageInfo
 	execResult    runtime.ExecResult
 	buildResult   runtime.BuildResult
 	buildStarted  chan struct{}
@@ -1315,6 +1391,14 @@ func (f *httpFakeRuntime) Inspect(_ context.Context, containerID string) (runtim
 	return info, nil
 }
 
+func (f *httpFakeRuntime) InspectImage(_ context.Context, imageRef string) (runtime.ImageInfo, error) {
+	info, ok := f.images[imageRef]
+	if !ok {
+		return runtime.ImageInfo{}, runtime.ErrImageNotFound
+	}
+	return info, nil
+}
+
 func (f *httpFakeRuntime) ListByLabel(_ context.Context, key, value string) ([]runtime.ContainerInfo, error) {
 	var infos []runtime.ContainerInfo
 	for _, info := range f.containers {
@@ -1335,6 +1419,15 @@ func (f *httpFakeRuntime) lookup(idOrName string) (runtime.ContainerInfo, bool) 
 		}
 	}
 	return runtime.ContainerInfo{}, false
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeRuntimePublicError struct {

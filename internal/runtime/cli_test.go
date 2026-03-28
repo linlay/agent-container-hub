@@ -178,6 +178,39 @@ func TestCLIProviderExecReturnsNotFoundWhenReferenceMissing(t *testing.T) {
 	}
 }
 
+func TestCLIProviderInspectImageReturnsImageInfo(t *testing.T) {
+	t.Parallel()
+
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+
+	info, err := provider.InspectImage(context.Background(), "daily-office:latest")
+	if err != nil {
+		t.Fatalf("InspectImage() error = %v", err)
+	}
+	if info.ID != "sha256:demo-image" {
+		t.Fatalf("InspectImage() ID = %q, want %q", info.ID, "sha256:demo-image")
+	}
+	if info.Ref != "daily-office:latest" {
+		t.Fatalf("InspectImage() Ref = %q, want %q", info.Ref, "daily-office:latest")
+	}
+	expectedCreatedAt := time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC)
+	if !info.CreatedAt.Equal(expectedCreatedAt) {
+		t.Fatalf("InspectImage() CreatedAt = %s, want %s", info.CreatedAt, expectedCreatedAt)
+	}
+}
+
+func TestCLIProviderInspectImageReturnsNotFoundWhenMissing(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	t.Setenv("FAKE_RUNTIME_IMAGE_INSPECT_MODE", "missing")
+
+	_, err := provider.InspectImage(context.Background(), "daily-office:latest")
+	if !errors.Is(err, ErrImageNotFound) {
+		t.Fatalf("InspectImage() error = %v, want ErrImageNotFound", err)
+	}
+}
+
 func TestClassifyImageNotFoundMessage(t *testing.T) {
 	t.Parallel()
 
@@ -314,6 +347,17 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 		"  fi\n" +
 		"  status=\"${FAKE_RUNTIME_INSPECT_STATUS:-running}\"\n" +
 		"  printf '[{\"Id\":\"ctr-demo\",\"Name\":\"/demo\",\"ImageName\":\"busybox:latest\",\"Config\":{\"Image\":\"busybox:latest\",\"Labels\":{}},\"State\":{\"Status\":\"%s\"},\"Created\":\"2026-03-17T12:38:34Z\"}]\\n' \"$status\"\n" +
+		"  ;;\n" +
+		"image)\n" +
+		"  case \"$2\" in\n" +
+		"  inspect)\n" +
+		"    if [ \"$FAKE_RUNTIME_IMAGE_INSPECT_MODE\" = 'missing' ]; then\n" +
+		"      printf 'Error: No such image: %s\\n' \"$3\" >&2\n" +
+		"      exit 1\n" +
+		"    fi\n" +
+		"    printf '[{\"Id\":\"sha256:demo-image\",\"RepoTags\":[\"%s\"],\"Created\":\"2026-03-17T12:38:34Z\"}]\\n' \"$3\"\n" +
+		"    ;;\n" +
+		"  esac\n" +
 		"  ;;\n" +
 		"exec)\n" +
 		"  printf '%s' \"$FAKE_RUNTIME_EXEC_STDOUT\"\n" +

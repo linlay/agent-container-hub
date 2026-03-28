@@ -1,6 +1,7 @@
 import {
   api,
   bindModalDismiss,
+  closeModal,
   escapeHTML,
   initializeShell,
   openModal,
@@ -9,6 +10,16 @@ import {
 } from "/ui/common.js";
 
 const ACTIVE_BUILD_STATUSES = new Set(["building", "smoke_checking"]);
+const BUILD_TARGET_DETAILS = {
+  build: {
+    label: "build",
+    description: "Standard image build using the environment Makefile.",
+  },
+  "build-cn": {
+    label: "build-cn",
+    description: "CN-friendly image build using mirror-oriented settings.",
+  },
+};
 
 const state = {
   environments: {
@@ -18,6 +29,7 @@ const state = {
     selectedDetails: defaultEnvironmentDetails(),
     selectedDefaultExecute: defaultExecutePreset(),
     selectedAgentPrompt: "",
+    selectedAvailableBuildTargets: [],
     selectedLastBuild: null,
   },
   files: {
@@ -43,6 +55,10 @@ const saveFileButton = document.getElementById("save-file");
 const environmentFileList = document.getElementById("environment-file-list");
 const environmentFilePath = document.getElementById("environment-file-path");
 const environmentFileContent = document.getElementById("environment-file-content");
+const buildTargetBackdrop = document.getElementById("build-target-backdrop");
+const buildTargetMeta = document.getElementById("build-target-meta");
+const buildTargetOptions = document.getElementById("build-target-options");
+const buildTargetConfirm = document.getElementById("build-target-confirm");
 const buildProgressBackdrop = document.getElementById("build-progress-backdrop");
 const buildProgressSummary = document.getElementById("build-progress-summary");
 const buildProgressMeta = document.getElementById("build-progress-meta");
@@ -64,6 +80,7 @@ function clearEnvironmentForm() {
   state.environments.selectedDetails = defaultEnvironmentDetails();
   state.environments.selectedDefaultExecute = defaultExecutePreset();
   state.environments.selectedAgentPrompt = "";
+  state.environments.selectedAvailableBuildTargets = [];
   state.environments.selectedLastBuild = null;
   state.files.items = [];
   state.files.selectedPath = "";
@@ -89,6 +106,7 @@ function defaultBuildJob() {
     id: "",
     environment_name: "",
     image_ref: "",
+    target: "",
     status: "",
     output: "",
     error: "",
@@ -152,11 +170,36 @@ function normalizeExecutePreset(preset) {
   };
 }
 
+function normalizeBuildTargets(targets) {
+  return Array.isArray(targets) ? targets.map((item) => String(item || "").trim()).filter(Boolean) : [];
+}
+
 function formatBuildStatus(status) {
   if (!status) {
     return "unknown";
   }
   return status.replaceAll("_", " ");
+}
+
+function formatBuildTarget(target) {
+  const value = String(target || "").trim();
+  if (!value) {
+    return "";
+  }
+  return BUILD_TARGET_DETAILS[value]?.label || value;
+}
+
+function buildTargetDescription(target) {
+  const value = String(target || "").trim();
+  if (!value) {
+    return "Managed Docker build using the saved environment Dockerfile.";
+  }
+  return BUILD_TARGET_DETAILS[value]?.description || "Build using the selected Makefile target.";
+}
+
+function buildTargetSuffix(target) {
+  const label = formatBuildTarget(target);
+  return label ? ` via ${label}` : "";
 }
 
 function isBuildActive(status) {
@@ -284,8 +327,9 @@ async function selectEnvironment(name) {
   document.getElementById("default-execute-cwd").value = state.environments.selectedDefaultExecute.cwd || "";
   document.getElementById("default-execute-timeout").value = state.environments.selectedDefaultExecute.timeout_ms || "";
   document.getElementById("default-execute-args").value = state.environments.selectedDefaultExecute.args.join("\n");
+  state.environments.selectedAvailableBuildTargets = normalizeBuildTargets(item.available_build_targets);
   environmentOutput.textContent = item.last_build
-    ? `Last build ${formatBuildStatus(item.last_build.status)} at ${item.last_build.started_at || "-"}`
+    ? `Last build ${formatBuildStatus(item.last_build.status)}${buildTargetSuffix(item.last_build.target)} at ${item.last_build.started_at || "-"}`
     : "Environment loaded.";
   environmentYAML.textContent = item.yaml || "No YAML available.";
   updateBuildButton();
@@ -334,10 +378,41 @@ function syncBuildReference(job) {
   ));
   if (state.environments.selectedName === job.environment_name) {
     state.environments.selectedLastBuild = normalizeBuildJob(job);
-    environmentOutput.textContent = `Build ${formatBuildStatus(job.status)} for ${job.environment_name} (${job.image_ref}).`;
+    environmentOutput.textContent = `Build ${formatBuildStatus(job.status)}${buildTargetSuffix(job.target)} for ${job.environment_name} (${job.image_ref}).`;
     updateBuildButton();
   }
   renderEnvironments();
+}
+
+function renderBuildTargetOptions(targets = state.environments.selectedAvailableBuildTargets) {
+  const availableTargets = normalizeBuildTargets(targets);
+  if (availableTargets.length === 0) {
+    buildTargetMeta.textContent = "No Makefile build target was detected. This will use the default managed Docker build.";
+    buildTargetOptions.innerHTML = `
+      <div class="build-target-option readonly">
+        <strong>default build</strong>
+        <div class="meta">${escapeHTML(buildTargetDescription(""))}</div>
+      </div>
+    `;
+    return;
+  }
+
+  buildTargetMeta.textContent = "Select which Makefile target should be used for this build.";
+  const defaultTarget = availableTargets.includes("build") ? "build" : availableTargets[0];
+  buildTargetOptions.innerHTML = availableTargets.map((target) => `
+    <label class="build-target-option" for="build-target-${escapeHTML(target)}">
+      <input id="build-target-${escapeHTML(target)}" type="radio" name="build-target" value="${escapeHTML(target)}" ${target === defaultTarget ? "checked" : ""}>
+      <div class="build-target-copy">
+        <strong>${escapeHTML(formatBuildTarget(target))}</strong>
+        <div class="meta">${escapeHTML(buildTargetDescription(target))}</div>
+      </div>
+    </label>
+  `).join("");
+}
+
+function selectedBuildTarget() {
+  const selected = document.querySelector('input[name="build-target"]:checked');
+  return selected ? String(selected.value || "").trim() : "";
 }
 
 function renderBuildProgress() {
@@ -362,6 +437,10 @@ function renderBuildProgress() {
     <div class="detail-box">
       <div class="meta">Image</div>
       <strong>${escapeHTML(job.image_ref || "-")}</strong>
+    </div>
+    <div class="detail-box">
+      <div class="meta">Target</div>
+      <strong>${escapeHTML(formatBuildTarget(job.target) || "default")}</strong>
     </div>
     <div class="detail-box">
       <div class="meta">Status</div>
@@ -508,6 +587,7 @@ async function openLatestBuildProgress(name) {
 async function startBuild(name) {
   state.buildProgress.job = normalizeBuildJob({
     environment_name: name,
+    target: "",
     status: "building",
     output: "",
   });
@@ -520,6 +600,30 @@ async function startBuild(name) {
     body: "{}",
   });
   await openBuildProgress(result);
+}
+
+async function startBuildWithTarget(name, target) {
+  state.buildProgress.job = normalizeBuildJob({
+    environment_name: name,
+    target: target || "",
+    status: "building",
+    output: "",
+  });
+  state.buildProgress.log = "";
+  renderBuildProgress();
+  openModal("build-progress-backdrop");
+
+  const payload = target ? { target } : {};
+  const result = await api(`/api/environments/${name}/build-jobs`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  await openBuildProgress(result);
+}
+
+function openBuildTargetModal() {
+  renderBuildTargetOptions();
+  openModal("build-target-backdrop");
 }
 
 async function handleBuildButtonClick() {
@@ -536,7 +640,7 @@ async function handleBuildButtonClick() {
       await openBuildProgress(state.environments.selectedLastBuild);
       return;
     }
-    await startBuild(name);
+    openBuildTargetModal();
   } catch (error) {
     if (String(error.message || "").includes("build already in progress")) {
       await openLatestBuildProgress(name);
@@ -555,6 +659,27 @@ async function initialize() {
 
   buildProgressBackdrop.addEventListener("modal:closed", () => {
     disconnectBuildStream();
+  });
+
+  buildTargetConfirm.addEventListener("click", async () => {
+    const name = document.getElementById("name").value.trim();
+    if (!name) {
+      environmentOutput.textContent = "Environment name is required before build.";
+      showToast("Environment name is required before build.", "error");
+      return;
+    }
+
+    setLoading(buildTargetConfirm, true);
+    try {
+      const target = selectedBuildTarget();
+      closeModal("build-target-backdrop");
+      await startBuildWithTarget(name, target);
+    } catch (error) {
+      environmentOutput.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      setLoading(buildTargetConfirm, false);
+    }
   });
 
   buildProgressRefresh.addEventListener("click", async () => {
@@ -595,6 +720,7 @@ async function initialize() {
       state.environments.selectedDetails = normalizeEnvironmentDetails(result);
       state.environments.selectedDefaultExecute = normalizeExecutePreset(result.default_execute);
       state.environments.selectedAgentPrompt = result.agent_prompt || "";
+      state.environments.selectedAvailableBuildTargets = normalizeBuildTargets(result.available_build_targets);
       state.environments.selectedLastBuild = normalizeBuildJob(result.last_build);
       environmentOutput.textContent = "Environment saved.";
       environmentYAML.textContent = result.yaml || "No YAML available.";

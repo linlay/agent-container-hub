@@ -62,6 +62,7 @@ func (s *SQLiteStore) init() error {
 			id TEXT PRIMARY KEY,
 			environment_name TEXT NOT NULL,
 			image_ref TEXT NOT NULL,
+			target TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
 			output TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
@@ -94,7 +95,50 @@ func (s *SQLiteStore) init() error {
 			return fmt.Errorf("init sqlite schema: %w", err)
 		}
 	}
+	if err := s.ensureBuildJobTargetColumn(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *SQLiteStore) ensureBuildJobTargetColumn() error {
+	ok, err := s.tableHasColumn("build_jobs", "target")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE build_jobs ADD COLUMN target TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate build_jobs.target: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) tableHasColumn(tableName, columnName string) (bool, error) {
+	rows, err := s.db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, tableName))
+	if err != nil {
+		return false, fmt.Errorf("inspect table info for %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, fmt.Errorf("scan table info for %s: %w", tableName, err)
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate table info for %s: %w", tableName, err)
+	}
+	return false, nil
 }
 
 func (s *SQLiteStore) SaveSession(_ context.Context, session *model.Session) error {
@@ -318,17 +362,18 @@ func (s *SQLiteStore) ListSessionExecutions(_ context.Context, sessionID string,
 
 func (s *SQLiteStore) SaveBuildJob(_ context.Context, job *model.BuildJob) error {
 	_, err := s.db.Exec(`
-		INSERT INTO build_jobs (id, environment_name, image_ref, status, output, error, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO build_jobs (id, environment_name, image_ref, target, status, output, error, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			environment_name=excluded.environment_name,
 			image_ref=excluded.image_ref,
+			target=excluded.target,
 			status=excluded.status,
 			output=excluded.output,
 			error=excluded.error,
 			started_at=excluded.started_at,
 			finished_at=excluded.finished_at
-	`, job.ID, job.EnvironmentName, job.ImageRef, string(job.Status), job.Output, job.Error,
+	`, job.ID, job.EnvironmentName, job.ImageRef, job.Target, string(job.Status), job.Output, job.Error,
 		job.StartedAt.UTC().Format(time.RFC3339Nano), job.FinishedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("save build job: %w", err)
@@ -338,7 +383,7 @@ func (s *SQLiteStore) SaveBuildJob(_ context.Context, job *model.BuildJob) error
 
 func (s *SQLiteStore) GetBuildJob(_ context.Context, id string) (*model.BuildJob, error) {
 	row := s.db.QueryRow(`
-		SELECT id, environment_name, image_ref, status, output, error, started_at, finished_at
+		SELECT id, environment_name, image_ref, target, status, output, error, started_at, finished_at
 		FROM build_jobs
 		WHERE id = ?
 	`, id)
@@ -346,7 +391,7 @@ func (s *SQLiteStore) GetBuildJob(_ context.Context, id string) (*model.BuildJob
 	var job model.BuildJob
 	var status string
 	var startedAt, finishedAt string
-	if err := row.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
+	if err := row.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &job.Target, &status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
@@ -360,7 +405,7 @@ func (s *SQLiteStore) GetBuildJob(_ context.Context, id string) (*model.BuildJob
 
 func (s *SQLiteStore) ListBuildJobs(_ context.Context, environmentName string) ([]*model.BuildJob, error) {
 	query := `
-		SELECT id, environment_name, image_ref, status, output, error, started_at, finished_at
+		SELECT id, environment_name, image_ref, target, status, output, error, started_at, finished_at
 		FROM build_jobs`
 	args := []any{}
 	if strings.TrimSpace(environmentName) != "" {
@@ -380,7 +425,7 @@ func (s *SQLiteStore) ListBuildJobs(_ context.Context, environmentName string) (
 		var job model.BuildJob
 		var status string
 		var startedAt, finishedAt string
-		if err := rows.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&job.ID, &job.EnvironmentName, &job.ImageRef, &job.Target, &status, &job.Output, &job.Error, &startedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("scan build job: %w", err)
 		}
 		job.Status = model.BuildJobStatus(status)

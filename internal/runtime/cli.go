@@ -252,6 +252,32 @@ func (p *CLIProvider) Inspect(ctx context.Context, containerID string) (Containe
 	return infos[0], nil
 }
 
+func (p *CLIProvider) InspectImage(ctx context.Context, imageRef string) (ImageInfo, error) {
+	imageRef = strings.TrimSpace(imageRef)
+	if imageRef == "" {
+		return ImageInfo{}, ErrImageNotFound
+	}
+	result, err := p.runCommand(ctx, "image", "inspect", imageRef)
+	if err != nil {
+		detail := strings.TrimSpace(result.stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(result.stdout)
+		}
+		if isImageNotFoundDetail(detail) {
+			return ImageInfo{}, ErrImageNotFound
+		}
+		return ImageInfo{}, p.commandError([]string{"image", "inspect", imageRef}, result, err, "")
+	}
+	images, err := parseImageInspect(result.stdout)
+	if err != nil {
+		return ImageInfo{}, err
+	}
+	if len(images) == 0 {
+		return ImageInfo{}, ErrImageNotFound
+	}
+	return images[0], nil
+}
+
 func (p *CLIProvider) ListByLabel(ctx context.Context, key, value string) ([]ContainerInfo, error) {
 	result, err := p.runCommand(ctx, "ps", "-a", "--filter", fmt.Sprintf("label=%s=%s", key, value), "--format", "{{.ID}}")
 	if err != nil {
@@ -426,6 +452,12 @@ type inspectResponse struct {
 	Created string `json:"Created"`
 }
 
+type imageInspectResponse struct {
+	ID       string   `json:"Id"`
+	RepoTags []string `json:"RepoTags"`
+	Created  string   `json:"Created"`
+}
+
 func parseInspect(raw string) ([]ContainerInfo, error) {
 	var responses []inspectResponse
 	if err := json.Unmarshal([]byte(raw), &responses); err != nil {
@@ -444,6 +476,27 @@ func parseInspect(raw string) ([]ContainerInfo, error) {
 			Image:     image,
 			State:     parseContainerState(item.State.Status),
 			Labels:    model.CloneMap(item.Config.Labels),
+			CreatedAt: createdAt.UTC(),
+		})
+	}
+	return infos, nil
+}
+
+func parseImageInspect(raw string) ([]ImageInfo, error) {
+	var responses []imageInspectResponse
+	if err := json.Unmarshal([]byte(raw), &responses); err != nil {
+		return nil, fmt.Errorf("parse image inspect: %w", err)
+	}
+	infos := make([]ImageInfo, 0, len(responses))
+	for _, item := range responses {
+		createdAt, _ := time.Parse(time.RFC3339Nano, item.Created)
+		ref := ""
+		if len(item.RepoTags) > 0 {
+			ref = strings.TrimSpace(item.RepoTags[0])
+		}
+		infos = append(infos, ImageInfo{
+			ID:        item.ID,
+			Ref:       ref,
 			CreatedAt: createdAt.UTC(),
 		})
 	}

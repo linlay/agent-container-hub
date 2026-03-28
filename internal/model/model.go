@@ -100,14 +100,15 @@ type BuildJobStatus string
 const (
 	BuildJobStatusBuilding      BuildJobStatus = "building"
 	BuildJobStatusSmokeChecking BuildJobStatus = "smoke_checking"
-	BuildJobStatusSucceeded BuildJobStatus = "succeeded"
-	BuildJobStatusFailed    BuildJobStatus = "failed"
+	BuildJobStatusSucceeded     BuildJobStatus = "succeeded"
+	BuildJobStatusFailed        BuildJobStatus = "failed"
 )
 
 type BuildJob struct {
 	ID              string         `json:"id"`
 	EnvironmentName string         `json:"environment_name"`
 	ImageRef        string         `json:"image_ref"`
+	Target          string         `json:"target,omitempty"`
 	Status          BuildJobStatus `json:"status"`
 	Output          string         `json:"output,omitempty"`
 	Error           string         `json:"error,omitempty"`

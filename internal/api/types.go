@@ -111,23 +111,24 @@ type UpsertEnvironmentRequest struct {
 }
 
 type EnvironmentResponse struct {
-	Name            string              `json:"name"`
-	Description     string              `json:"description,omitempty"`
-	ImageRepository string              `json:"image_repository"`
-	ImageTag        string              `json:"image_tag"`
-	ImageRef        string              `json:"image_ref"`
-	DefaultCwd      string              `json:"default_cwd"`
-	DefaultEnv      map[string]string   `json:"default_env,omitempty"`
-	AgentPrompt     string              `json:"agent_prompt,omitempty"`
-	Mounts          []model.Mount       `json:"mounts,omitempty"`
-	Resources       model.ResourceSpec  `json:"resources"`
-	Enabled         bool                `json:"enabled"`
-	DefaultExecute  model.ExecutePreset `json:"default_execute,omitempty"`
-	Build           model.BuildSpec     `json:"build"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	LastBuild       *BuildJobResponse   `json:"last_build,omitempty"`
-	YAML            string              `json:"yaml,omitempty"`
+	Name                  string              `json:"name"`
+	Description           string              `json:"description,omitempty"`
+	ImageRepository       string              `json:"image_repository"`
+	ImageTag              string              `json:"image_tag"`
+	ImageRef              string              `json:"image_ref"`
+	DefaultCwd            string              `json:"default_cwd"`
+	DefaultEnv            map[string]string   `json:"default_env,omitempty"`
+	AgentPrompt           string              `json:"agent_prompt,omitempty"`
+	Mounts                []model.Mount       `json:"mounts,omitempty"`
+	Resources             model.ResourceSpec  `json:"resources"`
+	Enabled               bool                `json:"enabled"`
+	DefaultExecute        model.ExecutePreset `json:"default_execute,omitempty"`
+	Build                 model.BuildSpec     `json:"build"`
+	AvailableBuildTargets []string            `json:"available_build_targets,omitempty"`
+	CreatedAt             time.Time           `json:"created_at"`
+	UpdatedAt             time.Time           `json:"updated_at"`
+	LastBuild             *BuildJobResponse   `json:"last_build,omitempty"`
+	YAML                  string              `json:"yaml,omitempty"`
 }
 
 type EnvironmentAgentPromptResponse struct {
@@ -149,12 +150,15 @@ type PutEnvironmentFileRequest struct {
 	Content string `json:"content"`
 }
 
-type BuildEnvironmentRequest struct{}
+type BuildEnvironmentRequest struct {
+	Target string `json:"target"`
+}
 
 type BuildJobResponse struct {
 	ID              string    `json:"id"`
 	EnvironmentName string    `json:"environment_name"`
 	ImageRef        string    `json:"image_ref"`
+	Target          string    `json:"target,omitempty"`
 	Status          string    `json:"status"`
 	Output          string    `json:"output,omitempty"`
 	Error           string    `json:"error,omitempty"`
