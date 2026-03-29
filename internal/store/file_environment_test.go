@@ -211,6 +211,52 @@ func TestFileEnvironmentStoreRejectsInvalidEnvironmentFilePaths(t *testing.T) {
 	}
 }
 
+func TestRepoToolboxEnvironmentConfigLoads(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs(filepath.Join("..", "..", "configs", "environments"))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	store, err := OpenFileEnvironmentStore(root)
+	if err != nil {
+		t.Fatalf("OpenFileEnvironmentStore() error = %v", err)
+	}
+
+	environment, err := store.GetEnvironment(context.Background(), "toolbox")
+	if err != nil {
+		t.Fatalf("GetEnvironment() error = %v", err)
+	}
+	if environment.ImageRef() != "toolbox:latest" {
+		t.Fatalf("ImageRef() = %q, want toolbox:latest", environment.ImageRef())
+	}
+	if environment.DefaultEnv["NODE_PATH"] != "/opt/toolbox/node_modules" {
+		t.Fatalf("NODE_PATH = %q", environment.DefaultEnv["NODE_PATH"])
+	}
+	if strings.Contains(environment.DefaultEnv["PATH"], "/skills") {
+		t.Fatalf("PATH = %q, should not include /skills", environment.DefaultEnv["PATH"])
+	}
+	if !strings.Contains(environment.Build.Dockerfile, "install_cli \"mock\"") {
+		t.Fatalf("Build.Dockerfile = %q, want mock install", environment.Build.Dockerfile)
+	}
+
+	files, err := store.ListEnvironmentFiles(context.Background(), "toolbox")
+	if err != nil {
+		t.Fatalf("ListEnvironmentFiles() error = %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("ListEnvironmentFiles() len = %d, want 3", len(files))
+	}
+
+	yamlFile, err := store.ReadEnvironmentFile(context.Background(), "toolbox", "environment.yml")
+	if err != nil {
+		t.Fatalf("ReadEnvironmentFile(environment.yml) error = %v", err)
+	}
+	if !strings.Contains(string(yamlFile.Content), "name: toolbox") || !strings.Contains(string(yamlFile.Content), "image_repository: toolbox") {
+		t.Fatalf("environment.yml = %q, want toolbox metadata", yamlFile.Content)
+	}
+}
+
 func newTestFileEnvironmentStore(t *testing.T) (*FileEnvironmentStore, string) {
 	t.Helper()
 

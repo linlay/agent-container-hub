@@ -46,6 +46,7 @@ environment 可以内嵌 Dockerfile。调用构建接口后，服务会：
 内置环境：
 
 - `shell` -> `busybox:latest`
+- `toolbox` -> `toolbox:latest`
 - `daily-office` -> `daily-office:latest`
 - `daily-office-pro` -> `daily-office-pro:latest`
 

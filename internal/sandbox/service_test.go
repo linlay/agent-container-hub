@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1150,6 +1151,102 @@ func TestDailyOfficeProSessionAllowsExplicitSkillsMount(t *testing.T) {
 	}
 }
 
+func TestToolboxSessionUsesDefaultEnvWithoutSkillsPath(t *testing.T) {
+	t.Parallel()
+
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	expectedPath := "/opt/toolbox/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "toolbox",
+		ImageRepository: "toolbox",
+		ImageTag:        "latest",
+		DefaultCwd:      runtime.DefaultMountPath,
+		DefaultEnv: map[string]string{
+			"TOOLBOX_HOME": "/opt/toolbox",
+			"NODE_PATH":    "/opt/toolbox/node_modules",
+			"PATH":         expectedPath,
+		},
+		Enabled: true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	created, err := services.sessions.Create(context.Background(), api.CreateSessionRequest{
+		SessionID:       "toolbox-session",
+		EnvironmentName: "toolbox",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if fake.lastCreate.Env["TOOLBOX_HOME"] != "/opt/toolbox" {
+		t.Fatalf("TOOLBOX_HOME = %q", fake.lastCreate.Env["TOOLBOX_HOME"])
+	}
+	if fake.lastCreate.Env["NODE_PATH"] != "/opt/toolbox/node_modules" {
+		t.Fatalf("NODE_PATH = %q", fake.lastCreate.Env["NODE_PATH"])
+	}
+	if fake.lastCreate.Env["PATH"] != expectedPath {
+		t.Fatalf("PATH = %q", fake.lastCreate.Env["PATH"])
+	}
+	if strings.Contains(fake.lastCreate.Env["PATH"], "/skills") {
+		t.Fatalf("PATH = %q, should not include /skills", fake.lastCreate.Env["PATH"])
+	}
+	if len(created.Mounts) != 1 {
+		t.Fatalf("created mounts len = %d, want 1", len(created.Mounts))
+	}
+	if created.Mounts[0].Destination != runtime.DefaultMountPath || created.Mounts[0].ReadOnly {
+		t.Fatalf("rootfs mount = %+v", created.Mounts[0])
+	}
+}
+
+func TestRepoToolboxEnvironmentIsListedWithYAML(t *testing.T) {
+	t.Parallel()
+
+	repoConfigRoot, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	services, cleanup, _ := newTestServicesWithOptions(t, func(cfg *config.Config) {
+		cfg.ConfigRoot = repoConfigRoot
+	})
+	defer cleanup()
+
+	listed, err := services.environments.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+
+	var toolbox *api.EnvironmentResponse
+	for _, item := range listed {
+		if item.Name == "toolbox" {
+			toolbox = item
+			break
+		}
+	}
+	if toolbox == nil {
+		t.Fatalf("List() did not include toolbox: %+v", listed)
+	}
+	if toolbox.ImageRef != "toolbox:latest" {
+		t.Fatalf("toolbox.ImageRef = %q, want toolbox:latest", toolbox.ImageRef)
+	}
+	if !slices.Contains(toolbox.AvailableBuildTargets, BuildTargetDefault) || !slices.Contains(toolbox.AvailableBuildTargets, BuildTargetCN) {
+		t.Fatalf("toolbox.AvailableBuildTargets = %+v, want build and build-cn", toolbox.AvailableBuildTargets)
+	}
+
+	got, err := services.environments.Get(context.Background(), "toolbox")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !strings.Contains(got.YAML, "name: toolbox") || !strings.Contains(got.YAML, "image_repository: toolbox") {
+		t.Fatalf("Get().YAML = %q, want toolbox metadata", got.YAML)
+	}
+}
+
 func TestCreateReturnsNotFoundWhenEnvironmentFileMissing(t *testing.T) {
 	t.Parallel()
 
@@ -1891,6 +1988,89 @@ func TestStartBuildJobWithExplicitTargetUsesMakefile(t *testing.T) {
 	}
 	if !strings.Contains(persisted.Output, "target=build-cn") || !strings.Contains(persisted.Output, "IMAGE_NAME=python-custom") || !strings.Contains(persisted.Output, "TAG=3.11-cn") || !strings.Contains(persisted.Output, "NPM_REGISTRY=https://registry.npmmirror.com") {
 		t.Fatalf("persisted.Output = %q, want make output with env overrides", persisted.Output)
+	}
+	if fake.lastBuild.Image != "" {
+		t.Fatalf("runtime Build should not run for make-based build, got %+v", fake.lastBuild)
+	}
+}
+
+func TestToolboxBuildWithExplicitTargetUsesMakefileArgs(t *testing.T) {
+	services, cleanup, fake := newTestServices(t)
+	defer cleanup()
+
+	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
+		Name:            "toolbox",
+		ImageRepository: "toolbox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+			BuildArgs: map[string]string{
+				"DBX_DOWNLOAD_URL":   "https://example.com/dbx.tar.gz",
+				"HTTPX_DOWNLOAD_URL": "https://example.com/httpx.tar.gz",
+				"MOCK_VERSION":       "0.1.0",
+				"MOCK_DOWNLOAD_URL":  "https://example.com/mock.tar.gz",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if _, err := services.environments.PutFile(context.Background(), "toolbox", "Makefile", ".PHONY: build build-cn\nbuild:\n\t@echo standard\nbuild-cn:\n\t@echo cn\n"); err != nil {
+		t.Fatalf("PutFile(Makefile) error = %v", err)
+	}
+
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(binDir) error = %v", err)
+	}
+	makePath := filepath.Join(binDir, "make")
+	makeScript := "#!/bin/sh\n" +
+		"printf 'target=%s\\n' \"$1\"\n" +
+		"printf 'IMAGE_NAME=%s\\n' \"$IMAGE_NAME\"\n" +
+		"printf 'TAG=%s\\n' \"$TAG\"\n" +
+		"printf 'DBX_DOWNLOAD_URL=%s\\n' \"$DBX_DOWNLOAD_URL\"\n" +
+		"printf 'HTTPX_DOWNLOAD_URL=%s\\n' \"$HTTPX_DOWNLOAD_URL\"\n" +
+		"printf 'MOCK_VERSION=%s\\n' \"$MOCK_VERSION\"\n" +
+		"printf 'MOCK_DOWNLOAD_URL=%s\\n' \"$MOCK_DOWNLOAD_URL\"\n"
+	if err := os.WriteFile(makePath, []byte(makeScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(make) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	started, err := services.builds.StartBuildJob(context.Background(), "toolbox", api.BuildEnvironmentRequest{Target: BuildTargetCN})
+	if err != nil {
+		t.Fatalf("StartBuildJob() error = %v", err)
+	}
+	if started.Target != BuildTargetCN {
+		t.Fatalf("StartBuildJob() target = %q, want %q", started.Target, BuildTargetCN)
+	}
+
+	var persisted *api.BuildJobResponse
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		persisted, err = services.builds.GetBuildJob(context.Background(), started.ID)
+		if err != nil {
+			t.Fatalf("GetBuildJob() error = %v", err)
+		}
+		if persisted.Status != string(model.BuildJobStatusBuilding) && persisted.Status != string(model.BuildJobStatusSmokeChecking) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if persisted == nil || persisted.Status != string(model.BuildJobStatusSucceeded) {
+		t.Fatalf("persisted = %+v, want succeeded build job", persisted)
+	}
+	if persisted.Target != BuildTargetCN {
+		t.Fatalf("persisted.Target = %q, want %q", persisted.Target, BuildTargetCN)
+	}
+	if !strings.Contains(persisted.Output, "target=build-cn") ||
+		!strings.Contains(persisted.Output, "IMAGE_NAME=toolbox") ||
+		!strings.Contains(persisted.Output, "TAG=latest") ||
+		!strings.Contains(persisted.Output, "DBX_DOWNLOAD_URL=https://example.com/dbx.tar.gz") ||
+		!strings.Contains(persisted.Output, "HTTPX_DOWNLOAD_URL=https://example.com/httpx.tar.gz") ||
+		!strings.Contains(persisted.Output, "MOCK_VERSION=0.1.0") ||
+		!strings.Contains(persisted.Output, "MOCK_DOWNLOAD_URL=https://example.com/mock.tar.gz") {
+		t.Fatalf("persisted.Output = %q, want make output with toolbox build args", persisted.Output)
 	}
 	if fake.lastBuild.Image != "" {
 		t.Fatalf("runtime Build should not run for make-based build, got %+v", fake.lastBuild)
