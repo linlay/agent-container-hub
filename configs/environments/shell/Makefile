@@ -1,7 +1,7 @@
 IMAGE_NAME ?= shell
 TAG ?= latest
 BASE_IMAGE ?= busybox:latest
-CN_BASE_IMAGE ?= docker.m.daocloud.io/library/busybox:latest
+CN_BASE_IMAGE ?= m.daocloud.io/docker.io/library/busybox:latest
 
 .PHONY: build build-cn
 

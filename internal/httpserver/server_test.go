@@ -1092,6 +1092,43 @@ func TestBuiltinDailyOfficeEnvironmentIsListed(t *testing.T) {
 	}
 }
 
+func TestBuiltinShellEnvironmentUsesRecommendedCNMirror(t *testing.T) {
+	t.Parallel()
+
+	repoRoot, err := repoRootFromPackageDir()
+	if err != nil {
+		t.Fatalf("repoRootFromPackageDir() error = %v", err)
+	}
+	handler := newHandlerForConfigRoot(t, "", filepath.Join(repoRoot, "configs"))
+
+	envs := doJSON[[]api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments", nil, http.StatusOK, "")
+	found := false
+	for _, env := range envs {
+		if env.Name == "shell" {
+			found = true
+			if env.ImageRef != "busybox:latest" {
+				t.Fatalf("shell image_ref = %q, want busybox:latest", env.ImageRef)
+			}
+			if !containsString(env.AvailableBuildTargets, "build") || !containsString(env.AvailableBuildTargets, "build-cn") {
+				t.Fatalf("shell available_build_targets = %+v, want build and build-cn", env.AvailableBuildTargets)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("shell not found in %+v", envs)
+	}
+
+	shell := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/shell", nil, http.StatusOK, "")
+	if !containsString(shell.AvailableBuildTargets, "build") || !containsString(shell.AvailableBuildTargets, "build-cn") {
+		t.Fatalf("shell available_build_targets = %+v, want build and build-cn", shell.AvailableBuildTargets)
+	}
+
+	makefile := doJSON[api.EnvironmentFileResponse](t, handler, http.MethodGet, "/api/environments/shell/files/Makefile", nil, http.StatusOK, "")
+	if !strings.Contains(makefile.Content, "CN_BASE_IMAGE ?= m.daocloud.io/docker.io/library/busybox:latest") {
+		t.Fatalf("shell Makefile = %q, want recommended DaoCloud CN_BASE_IMAGE", makefile.Content)
+	}
+}
+
 func TestBuiltinDailyOfficeProEnvironmentIsListed(t *testing.T) {
 	t.Parallel()
 
