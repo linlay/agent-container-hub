@@ -36,7 +36,7 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	provider, err := runtime.NewAutoProvider(cfg.Engine)
+	provider, err := runtime.NewAutoProvider(cfg.Engine, logger)
 	if err != nil {
 		log.Fatalf("load runtime provider: %v", err)
 	}

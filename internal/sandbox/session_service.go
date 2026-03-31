@@ -64,8 +64,13 @@ func (s *SessionService) Create(ctx context.Context, req api.CreateSessionReques
 	if !environment.Enabled {
 		return nil, fmt.Errorf("%w: environment is disabled", ErrValidation)
 	}
-	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef())
+	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef(), s.logger)
 	if err != nil {
+		s.logger.Error("image availability check failed",
+			"environment", environmentName,
+			"image", environment.ImageRef(),
+			"error", err,
+		)
 		return nil, err
 	}
 	if !available {

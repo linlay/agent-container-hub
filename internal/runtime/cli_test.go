@@ -204,10 +204,29 @@ func TestCLIProviderInspectImageReturnsNotFoundWhenMissing(t *testing.T) {
 	binary, _ := writeFakeRuntimeBinary(t)
 	provider := &CLIProvider{binary: binary}
 	t.Setenv("FAKE_RUNTIME_IMAGE_INSPECT_MODE", "missing")
+	t.Setenv("FAKE_RUNTIME_IMAGE_LS_MODE", "empty")
 
 	_, err := provider.InspectImage(context.Background(), "daily-office:latest")
 	if !errors.Is(err, ErrImageNotFound) {
 		t.Fatalf("InspectImage() error = %v, want ErrImageNotFound", err)
+	}
+}
+
+func TestCLIProviderInspectImageFallbackOnContainerdStore(t *testing.T) {
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+	// image inspect reports "No such image" but image ls finds the image
+	t.Setenv("FAKE_RUNTIME_IMAGE_INSPECT_MODE", "missing")
+
+	info, err := provider.InspectImage(context.Background(), "daily-office:latest")
+	if err != nil {
+		t.Fatalf("InspectImage() error = %v, want nil (fallback should succeed)", err)
+	}
+	if info.ID != "sha256:demo-image" {
+		t.Fatalf("InspectImage() ID = %q, want %q", info.ID, "sha256:demo-image")
+	}
+	if info.Ref != "daily-office:latest" {
+		t.Fatalf("InspectImage() Ref = %q, want %q", info.Ref, "daily-office:latest")
 	}
 }
 
@@ -356,6 +375,20 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 		"      exit 1\n" +
 		"    fi\n" +
 		"    printf '[{\"Id\":\"sha256:demo-image\",\"RepoTags\":[\"%s\"],\"Created\":\"2026-03-17T12:38:34Z\"}]\\n' \"$3\"\n" +
+		"    ;;\n" +
+		"  ls)\n" +
+		"    if [ \"$FAKE_RUNTIME_IMAGE_LS_MODE\" = 'empty' ]; then\n" +
+		"      exit 0\n" +
+		"    fi\n" +
+		"    if [ -n \"$FAKE_RUNTIME_IMAGE_LS_OUTPUT\" ]; then\n" +
+		"      printf '%s\\n' \"$FAKE_RUNTIME_IMAGE_LS_OUTPUT\"\n" +
+		"    else\n" +
+		"      ref=''\n" +
+		"      for arg in \"$@\"; do\n" +
+		"        case \"$arg\" in reference=*) ref=\"${arg#reference=}\";; esac\n" +
+		"      done\n" +
+		"      printf 'sha256:demo-image\\t%s\\n' \"$ref\"\n" +
+		"    fi\n" +
 		"    ;;\n" +
 		"  esac\n" +
 		"  ;;\n" +

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 
 type CLIProvider struct {
 	binary string
+	logger *slog.Logger
 }
 
 type commandResult struct {
@@ -27,16 +29,19 @@ type commandResult struct {
 	exitCode int
 }
 
-func NewAutoProvider(explicit string) (Provider, error) {
+func NewAutoProvider(explicit string, logger *slog.Logger) (Provider, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if explicit != "" {
 		if _, err := exec.LookPath(explicit); err != nil {
 			return nil, fmt.Errorf("%w: %s", ErrRuntimeUnavailable, explicit)
 		}
-		return &CLIProvider{binary: explicit}, nil
+		return &CLIProvider{binary: explicit, logger: logger}, nil
 	}
 	for _, candidate := range []string{"docker", "podman"} {
 		if _, err := exec.LookPath(candidate); err == nil {
-			return &CLIProvider{binary: candidate}, nil
+			return &CLIProvider{binary: candidate, logger: logger}, nil
 		}
 	}
 	return nil, ErrRuntimeUnavailable
@@ -264,7 +269,22 @@ func (p *CLIProvider) InspectImage(ctx context.Context, imageRef string) (ImageI
 			detail = strings.TrimSpace(result.stdout)
 		}
 		if isImageNotFoundDetail(detail) {
-			return ImageInfo{}, ErrImageNotFound
+			// containerd image store (Docker Desktop) may report "No such image"
+			// for locally available images; fall back to "image ls --filter".
+			info, fallbackErr := p.inspectImageFallback(ctx, imageRef)
+			if fallbackErr != nil {
+				return ImageInfo{}, ErrImageNotFound
+			}
+			return info, nil
+		}
+		if p.logger != nil {
+			p.logger.Warn("image inspect unexpected failure",
+				"image", imageRef,
+				"exit_code", result.exitCode,
+				"stderr", result.stderr,
+				"stdout", result.stdout,
+				"error", err,
+			)
 		}
 		return ImageInfo{}, p.commandError([]string{"image", "inspect", imageRef}, result, err, "")
 	}
@@ -276,6 +296,39 @@ func (p *CLIProvider) InspectImage(ctx context.Context, imageRef string) (ImageI
 		return ImageInfo{}, ErrImageNotFound
 	}
 	return images[0], nil
+}
+
+// inspectImageFallback uses "image ls --filter" to check image existence.
+// This handles Docker Desktop with containerd image store where "image inspect"
+// may incorrectly report "No such image" for locally available images.
+func (p *CLIProvider) inspectImageFallback(ctx context.Context, imageRef string) (ImageInfo, error) {
+	result, err := p.runCommand(ctx, "image", "ls", "--no-trunc",
+		"--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}",
+		"--filter", "reference="+imageRef)
+	if err != nil {
+		return ImageInfo{}, err
+	}
+	return parseImageListOutput(result.stdout)
+}
+
+func parseImageListOutput(raw string) (ImageInfo, error) {
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		id := strings.TrimSpace(parts[0])
+		if id == "" {
+			continue
+		}
+		ref := ""
+		if len(parts) > 1 {
+			ref = strings.TrimSpace(parts[1])
+		}
+		return ImageInfo{ID: id, Ref: ref}, nil
+	}
+	return ImageInfo{}, ErrImageNotFound
 }
 
 func (p *CLIProvider) ListByLabel(ctx context.Context, key, value string) ([]ContainerInfo, error) {

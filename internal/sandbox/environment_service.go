@@ -100,7 +100,13 @@ func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentRespon
 	for _, environment := range environments {
 		response, err := s.toResponse(ctx, environment, false)
 		if err != nil {
-			return nil, err
+			s.logger.Warn("environment toResponse failed, using degraded response",
+				"environment", environment.Name,
+				"image", environment.ImageRef(),
+				"error", err,
+			)
+			responses = append(responses, s.toResponseDegraded(environment))
+			continue
 		}
 		responses = append(responses, response)
 	}
@@ -193,7 +199,7 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,
 	}
-	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef())
+	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef(), s.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -218,4 +224,25 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		response.YAML = string(payload.Content)
 	}
 	return response, nil
+}
+
+func (s *EnvironmentService) toResponseDegraded(environment *model.Environment) *api.EnvironmentResponse {
+	return &api.EnvironmentResponse{
+		Name:            environment.Name,
+		Description:     environment.Description,
+		ImageRepository: environment.ImageRepository,
+		ImageTag:        environment.ImageTag,
+		ImageRef:        environment.ImageRef(),
+		DefaultCwd:      environment.DefaultCwd,
+		DefaultEnv:      model.CloneMap(environment.DefaultEnv),
+		AgentPrompt:     environment.AgentPrompt,
+		Mounts:          append([]model.Mount(nil), environment.Mounts...),
+		Resources:       environment.Resources,
+		Enabled:         environment.Enabled,
+		DefaultExecute:  environment.DefaultExecute.Clone(),
+		Build:           environment.Build.Clone(),
+		Available:       false,
+		CreatedAt:       environment.CreatedAt,
+		UpdatedAt:       environment.UpdatedAt,
+	}
 }
