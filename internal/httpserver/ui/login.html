@@ -1,35 +1,41 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Agent Container Hub Login</title>
-  <link rel="stylesheet" href="/ui/styles.css">
-</head>
-<body class="login-page">
-  <main class="card login-card">
-    <h1>Agent Container Hub</h1>
-    <p>Use the administrator token to enter the sandbox and image manager.</p>
-    <input id="token" type="password" placeholder="Bearer token">
-    <button id="login">Sign in</button>
-    <div class="hint" id="hint"></div>
-  </main>
-  <script>
-    const hint = document.getElementById("hint");
-    document.getElementById("login").addEventListener("click", async () => {
-      const token = document.getElementById("token").value.trim();
-      hint.textContent = "Signing in...";
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token })
-      });
-      if (!response.ok) {
-        hint.textContent = "Token rejected.";
-        return;
-      }
-      window.location.href = "/";
-    });
-  </script>
-</body>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1" />
+		<title>Login - Agent Container Hub</title>
+		<link rel="stylesheet" href="/ui/styles.css" />
+		<link rel="icon" href="/ui/favicon.ico" type="image/x-icon" />
+	</head>
+	<body class="login-page">
+		<main class="card login-card">
+			<h1>Agent Container Hub</h1>
+			<p>
+				Use the administrator token to enter the sandbox and image
+				manager.
+			</p>
+			<input id="token" type="password" placeholder="Bearer token" />
+			<button id="login">Sign in</button>
+			<div class="hint" id="hint"></div>
+		</main>
+		<script>
+			const hint = document.getElementById("hint");
+			document
+				.getElementById("login")
+				.addEventListener("click", async () => {
+					const token = document.getElementById("token").value.trim();
+					hint.textContent = "Signing in...";
+					const response = await fetch("/api/auth/login", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ token }),
+					});
+					if (!response.ok) {
+						hint.textContent = "Token rejected.";
+						return;
+					}
+					window.location.href = "/";
+				});
+		</script>
+	</body>
 </html>

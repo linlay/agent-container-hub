@@ -370,6 +370,16 @@ label {
   margin-bottom: 10px;
 }
 
+.toolbar .actions {
+  flex-shrink: 0;
+}
+
+.toolbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .toolbar.wrap {
   flex-wrap: wrap;
 }
@@ -890,9 +900,10 @@ td strong {
 }
 
 .toast {
-  display: grid;
-  gap: 4px;
+  position: relative;
+  display: block;
   padding: 14px 14px 14px 16px;
+  padding-right: 48px;
   border-radius: 16px;
   border: 1px solid var(--glass-border);
   border-left: 4px solid var(--accent);
@@ -904,8 +915,47 @@ td strong {
   animation: toast-in var(--duration-normal) ease;
 }
 
+.toast-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.toast-copy span {
+  overflow-wrap: anywhere;
+}
+
 .toast.error {
   border-left-color: var(--warm);
+}
+
+.toast-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  box-shadow: none;
+  appearance: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.toast-close:hover,
+.toast-close:focus-visible {
+  background: rgba(31, 42, 45, 0.08);
+  color: var(--ink);
 }
 
 .toast.exit {

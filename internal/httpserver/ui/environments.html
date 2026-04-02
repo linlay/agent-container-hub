@@ -1,192 +1,292 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Agent Container Hub Environments</title>
-  <link rel="stylesheet" href="/ui/styles.css">
-</head>
-<body>
-  <header class="page-header">
-    <div>
-      <h1>Environment Console</h1>
-      <div class="meta">Manage named environments, preview YAML, and trigger image builds.</div>
-    </div>
-    <div class="header-actions">
-      <nav class="tabs" aria-label="Console navigation">
-        <a class="tab" data-nav="sessions" href="/sessions">Sessions</a>
-        <a class="tab" data-nav="environments" href="/environments">Environments</a>
-      </nav>
-      <button class="secondary" id="logout">Sign out</button>
-    </div>
-  </header>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1" />
+		<title>Environments - Agent Container Hub</title>
+		<link rel="stylesheet" href="/ui/styles.css" />
+		<link rel="icon" href="/ui/favicon.ico" type="image/x-icon" />
+	</head>
+	<body>
+		<header class="page-header">
+			<div>
+				<h1>Environment Console</h1>
+				<div class="meta">
+					Manage named environments, preview YAML, and trigger image
+					builds.
+				</div>
+			</div>
+			<div class="header-actions">
+				<nav class="tabs" aria-label="Console navigation">
+					<a class="tab" data-nav="sessions" href="/sessions"
+						>Sessions</a
+					>
+					<a class="tab" data-nav="environments" href="/environments"
+						>Environments</a
+					>
+				</nav>
+				<button class="secondary" id="logout">Sign out</button>
+			</div>
+		</header>
 
-  <main class="shell">
-    <section class="panel environment-layout">
-      <div class="card stack">
-        <div class="toolbar">
-          <div>
-            <h2>Environments</h2>
-            <div class="meta">Select an environment on the left, edit it on the right.</div>
-          </div>
-          <button class="ghost" id="refresh-environments">Refresh</button>
-        </div>
-        <div class="list" id="environment-list"></div>
-      </div>
+		<main class="shell">
+			<section class="panel environment-layout">
+				<div class="card stack">
+					<div class="toolbar">
+						<div>
+							<h2>Environments</h2>
+							<div class="meta">
+								Select an environment on the left, edit it on
+								the right.
+							</div>
+						</div>
+						<button class="ghost" id="refresh-environments">
+							Refresh
+						</button>
+					</div>
+					<div class="list" id="environment-list"></div>
+				</div>
 
-      <div class="card stack">
-        <div class="toolbar wrap">
-          <div>
-            <h2>Environment Details</h2>
-            <div class="meta">Form editing stays structured. YAML preview reflects the saved source of truth.</div>
-          </div>
-          <div class="actions">
-            <button id="save">Save Environment</button>
-            <button id="build">Build Image</button>
-          </div>
-        </div>
+				<div class="card stack">
+					<div class="toolbar wrap">
+						<div>
+							<h2>Environment Details</h2>
+							<div class="meta">
+								Form editing stays structured. YAML preview
+								reflects the saved source of truth.
+							</div>
+						</div>
+						<div class="actions">
+							<button id="save">Save Environment</button>
+							<button id="build">Build Image</button>
+						</div>
+					</div>
 
-        <div class="row">
-          <label>Name
-            <input id="name" placeholder="python-main">
-          </label>
-          <label>Image Repository
-            <input id="repository" placeholder="registry.example.com/agent-container-hub/python">
-          </label>
-        </div>
+					<div class="row">
+						<label
+							>Name
+							<input id="name" placeholder="python-main" />
+						</label>
+						<label
+							>Image Repository
+							<input
+								id="repository"
+								placeholder="registry.example.com/agent-container-hub/python"
+							/>
+						</label>
+					</div>
 
-        <div class="row">
-          <label>Image Tag
-            <input id="tag" placeholder="3.11-v1">
-          </label>
-          <label>Default Cwd
-            <input id="cwd" value="/workspace">
-          </label>
-        </div>
+					<div class="row">
+						<label
+							>Image Tag
+							<input id="tag" placeholder="3.11-v1" />
+						</label>
+						<label
+							>Default Cwd
+							<input id="cwd" value="/workspace" />
+						</label>
+					</div>
 
-        <label>Description
-          <textarea id="description"></textarea>
-        </label>
+					<label
+						>Description
+						<textarea id="description"></textarea>
+					</label>
 
-        <div class="stack">
-          <div>
-            <h3>Quick Execute Preset</h3>
-            <div class="meta">This preset powers the quick execute action on the Sessions page.</div>
-          </div>
+					<div class="stack">
+						<div>
+							<h3>Quick Execute Preset</h3>
+							<div class="meta">
+								This preset powers the quick execute action on
+								the Sessions page.
+							</div>
+						</div>
 
-          <div class="row">
-            <label>Command
-              <input id="default-execute-command" placeholder="pwd">
-            </label>
-            <label>Cwd
-              <input id="default-execute-cwd" placeholder="/workspace">
-            </label>
-          </div>
+						<div class="row">
+							<label
+								>Command
+								<input
+									id="default-execute-command"
+									placeholder="pwd"
+								/>
+							</label>
+							<label
+								>Cwd
+								<input
+									id="default-execute-cwd"
+									placeholder="/workspace"
+								/>
+							</label>
+						</div>
 
-          <div class="row">
-            <label>Timeout (ms)
-              <input id="default-execute-timeout" type="number" min="0" placeholder="30000">
-            </label>
-            <label>Args
-              <textarea id="default-execute-args" placeholder="One arg per line"></textarea>
-            </label>
-          </div>
-        </div>
+						<div class="row">
+							<label
+								>Timeout (ms)
+								<input
+									id="default-execute-timeout"
+									type="number"
+									min="0"
+									placeholder="30000"
+								/>
+							</label>
+							<label
+								>Args
+								<textarea
+									id="default-execute-args"
+									placeholder="One arg per line"
+								></textarea>
+							</label>
+						</div>
+					</div>
 
-        <pre id="environment-output">Select or create an environment to begin.</pre>
+					<pre id="environment-output">
+Select or create an environment to begin.</pre
+					>
 
-        <div class="stack">
-          <div class="toolbar wrap">
-            <div>
-              <h3>Environment Files</h3>
-              <div class="meta">Edit `environment.yml`, `Dockerfile`, `Makefile`, and allowed helper files under `scripts/` or `curl/`.</div>
-            </div>
-            <div class="actions">
-              <button class="secondary" id="refresh-files">Refresh Files</button>
-              <button class="secondary" id="new-file">New File</button>
-              <button id="save-file">Save File</button>
-            </div>
-          </div>
-          <div class="split">
-            <div class="list" id="environment-file-list"></div>
-            <div class="stack">
-              <label>File Path
-                <input id="environment-file-path" placeholder="Dockerfile or scripts/example.sh">
-              </label>
-              <label>File Content
-                <textarea class="tall" id="environment-file-content"></textarea>
-              </label>
-            </div>
-          </div>
-        </div>
+					<div class="stack">
+						<div class="toolbar wrap">
+							<div>
+								<h3>Environment Files</h3>
+								<div class="meta">
+									Edit `environment.yml`, `Dockerfile`,
+									`Makefile`, and allowed helper files under
+									`scripts/` or `curl/`.
+								</div>
+							</div>
+							<div class="actions">
+								<button class="secondary" id="refresh-files">
+									Refresh Files
+								</button>
+								<button class="secondary" id="new-file">
+									New File
+								</button>
+								<button id="save-file">Save File</button>
+							</div>
+						</div>
+						<div class="split">
+							<div class="list" id="environment-file-list"></div>
+							<div class="stack">
+								<label
+									>File Path
+									<input
+										id="environment-file-path"
+										placeholder="Dockerfile or scripts/example.sh"
+									/>
+								</label>
+								<label
+									>File Content
+									<textarea
+										class="tall"
+										id="environment-file-content"
+									></textarea>
+								</label>
+							</div>
+						</div>
+					</div>
 
-        <div class="stack">
-          <div>
-            <h3>YAML Preview</h3>
-            <div class="meta">Rendered from the saved environment response.</div>
-          </div>
-          <pre id="environment-yaml">No environment selected.</pre>
-        </div>
-      </div>
-    </section>
-  </main>
-  <div class="toast-container" id="toast-container"></div>
+					<div class="stack">
+						<div>
+							<h3>YAML Preview</h3>
+							<div class="meta">
+								Rendered from the saved environment response.
+							</div>
+						</div>
+						<pre id="environment-yaml">
+No environment selected.</pre
+						>
+					</div>
+				</div>
+			</section>
+		</main>
+		<div class="toast-container" id="toast-container"></div>
 
-  <div class="modal-backdrop" id="build-target-backdrop">
-    <div class="modal narrow">
-      <div class="modal-header">
-        <div>
-          <h2>Select Build Target</h2>
-          <div class="meta">Choose which build target to run before starting the image build.</div>
-        </div>
-        <button class="secondary modal-close" data-close-modal="build-target-backdrop">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="stack">
-          <div class="meta" id="build-target-meta">Choose a build target.</div>
-          <div class="stack" id="build-target-options"></div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="secondary" data-close-modal="build-target-backdrop">Cancel</button>
-        <button id="build-target-confirm">Start Build</button>
-      </div>
-    </div>
-  </div>
+		<div class="modal-backdrop" id="build-target-backdrop">
+			<div class="modal narrow">
+				<div class="modal-header">
+					<div>
+						<h2>Select Build Target</h2>
+						<div class="meta">
+							Choose which build target to run before starting the
+							image build.
+						</div>
+					</div>
+					<button
+						class="secondary modal-close"
+						data-close-modal="build-target-backdrop"
+					>
+						Close
+					</button>
+				</div>
+				<div class="modal-body">
+					<div class="stack">
+						<div class="meta" id="build-target-meta">
+							Choose a build target.
+						</div>
+						<div class="stack" id="build-target-options"></div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button
+						class="secondary"
+						data-close-modal="build-target-backdrop"
+					>
+						Cancel
+					</button>
+					<button id="build-target-confirm">Start Build</button>
+				</div>
+			</div>
+		</div>
 
-  <div class="modal-backdrop" id="build-progress-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <h2>Build Progress</h2>
-          <div class="meta">Watch the live image build stream and reconnect later if needed.</div>
-        </div>
-        <button class="secondary modal-close" data-close-modal="build-progress-backdrop">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="stack">
-          <div class="detail-grid" id="build-progress-summary">
-            <div class="detail-box">
-              <div class="meta">Environment</div>
-              <strong>-</strong>
-            </div>
-          </div>
-          <div class="toolbar wrap">
-            <div class="meta" id="build-progress-meta">No build selected.</div>
-            <label class="checkbox-inline">
-              <input id="build-progress-autoscroll" type="checkbox" checked>
-              Auto-scroll logs
-            </label>
-          </div>
-          <pre id="build-progress-log">Start a build to inspect live output.</pre>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="secondary" id="build-progress-refresh">Refresh Snapshot</button>
-      </div>
-    </div>
-  </div>
+		<div class="modal-backdrop" id="build-progress-backdrop">
+			<div class="modal">
+				<div class="modal-header">
+					<div>
+						<h2>Build Progress</h2>
+						<div class="meta">
+							Watch the live image build stream and reconnect
+							later if needed.
+						</div>
+					</div>
+					<button
+						class="secondary modal-close"
+						data-close-modal="build-progress-backdrop"
+					>
+						Close
+					</button>
+				</div>
+				<div class="modal-body">
+					<div class="stack">
+						<div class="detail-grid" id="build-progress-summary">
+							<div class="detail-box">
+								<div class="meta">Environment</div>
+								<strong>-</strong>
+							</div>
+						</div>
+						<div class="toolbar wrap">
+							<div class="meta" id="build-progress-meta">
+								No build selected.
+							</div>
+							<label class="checkbox-inline">
+								<input
+									id="build-progress-autoscroll"
+									type="checkbox"
+									checked
+								/>
+								Auto-scroll logs
+							</label>
+						</div>
+						<pre id="build-progress-log">
+Start a build to inspect live output.</pre
+						>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button class="secondary" id="build-progress-refresh">
+						Refresh Snapshot
+					</button>
+				</div>
+			</div>
+		</div>
 
-  <script type="module" src="/ui/environments.js"></script>
-</body>
+		<script type="module" src="/ui/environments.js"></script>
+	</body>
 </html>

@@ -103,10 +103,26 @@ export function showToast(message, type = "success", duration = 3200) {
     return null;
   }
 
-  const toast = document.createElement("button");
-  toast.type = "button";
+  const toast = document.createElement("div");
   toast.className = `toast ${type === "error" ? "error" : "success"}`;
-  toast.innerHTML = `<strong>${escapeHTML(type === "error" ? "Error" : "Success")}</strong><span>${escapeHTML(message)}</span>`;
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
+  const copy = document.createElement("div");
+  copy.className = "toast-copy";
+
+  const title = document.createElement("strong");
+  title.textContent = type === "error" ? "Error" : "Success";
+
+  const detail = document.createElement("span");
+  detail.textContent = String(message ?? "");
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "toast-close";
+  closeButton.setAttribute("aria-label", "Close notification");
+  closeButton.textContent = "\u00d7";
+
+  copy.append(title, detail);
+  toast.append(copy, closeButton);
 
   let removed = false;
   let timer = 0;
@@ -119,6 +135,11 @@ export function showToast(message, type = "success", duration = 3200) {
     toast.classList.add("exit");
     window.setTimeout(() => toast.remove(), 160);
   };
+
+  closeButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    dismiss();
+  });
 
   toast.addEventListener("click", dismiss);
   container.appendChild(toast);
