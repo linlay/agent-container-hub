@@ -1,21 +1,21 @@
 name: toolbox
-description: General-purpose developer toolbox runtime with dbx, httpx, and mock, without office dependencies.
+description: Python-focused CLI toolbox runtime with dbx, httpx, and mock, without office dependencies.
 image_repository: toolbox
 image_tag: latest
 default_cwd: /workspace
 default_env:
   TOOLBOX_HOME: /opt/toolbox
-  NODE_PATH: /opt/toolbox/node_modules
-  PATH: /opt/toolbox/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 agent_prompt: |
   You are running inside the `toolbox` environment.
 
-  This is a general-purpose CLI workspace with Python, Node.js, dbx, httpx, and mock available.
+  This is a Python-focused CLI workspace with dbx, httpx, and mock available.
 
   Important environment rules:
   - Do not assume office packages or document-conversion tools are installed.
   - Do not assume LibreOffice, Pandoc, or `/skills` mounts exist.
-  - Prefer the bundled CLIs and runtimes before proposing extra installation steps.
+  - Do not assume Node.js, npm, or frontend build tooling are installed.
+  - Prefer the bundled CLIs and Python runtime before proposing extra installation steps.
 enabled: true
 default_execute:
   command: /bin/bash
@@ -30,15 +30,13 @@ default_execute:
       echo ""
       echo "=== Tool Versions ==="
       echo "Python: $(python --version 2>&1)"
-      echo "Node: $(node --version 2>&1)"
-      echo "npm: $(npm --version 2>&1)"
       echo "DBX: $(dbx --version 2>&1)"
       echo "HTTPX: $(httpx --version 2>&1)"
       echo "Mock: $(mock version 2>&1)"
   timeout_ms: 30000
 build:
-  notes: Lightweight developer toolbox runtime without office dependencies or skill mount assumptions.
+  notes: Lightweight Python-oriented CLI runtime without office dependencies or skill mount assumptions.
   smoke_command: /bin/bash
   smoke_args:
     - -lc
-    - command -v bash >/dev/null && command -v python >/dev/null && command -v node >/dev/null && command -v npm >/dev/null && command -v curl >/dev/null && command -v jq >/dev/null && command -v dbx >/dev/null && command -v httpx >/dev/null && command -v mock >/dev/null && mock version >/dev/null
+    - command -v bash >/dev/null && command -v python >/dev/null && command -v curl >/dev/null && command -v jq >/dev/null && command -v dbx >/dev/null && command -v httpx >/dev/null && command -v mock >/dev/null && mock version >/dev/null

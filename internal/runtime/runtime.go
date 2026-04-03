@@ -49,6 +49,13 @@ type ImageInfo struct {
 	CreatedAt time.Time
 }
 
+type ImageMetadata struct {
+	Ref             string
+	CreatedAt       time.Time
+	TotalSizeBytes  int64
+	UniqueSizeBytes int64
+}
+
 type CreateOptions struct {
 	Name      string
 	Image     string

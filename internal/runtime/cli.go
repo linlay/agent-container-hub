@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -298,6 +299,17 @@ func (p *CLIProvider) InspectImage(ctx context.Context, imageRef string) (ImageI
 	return images[0], nil
 }
 
+func (p *CLIProvider) ListImageMetadata(ctx context.Context) (map[string]ImageMetadata, error) {
+	if !strings.EqualFold(filepath.Base(p.binary), "docker") {
+		return nil, nil
+	}
+	result, err := p.runCommand(ctx, "system", "df", "-v", "--format", "json")
+	if err != nil {
+		return nil, p.commandError([]string{"system", "df", "-v", "--format", "json"}, result, err, "")
+	}
+	return parseDockerSystemDFVerboseJSON(result.stdout)
+}
+
 // inspectImageFallback uses "image ls --filter" to check image existence.
 // This handles Docker Desktop with containerd image store where "image inspect"
 // may incorrectly report "No such image" for locally available images.
@@ -511,6 +523,18 @@ type imageInspectResponse struct {
 	Created  string   `json:"Created"`
 }
 
+type dockerSystemDFVerboseResponse struct {
+	Images []dockerSystemDFVerboseImage `json:"Images"`
+}
+
+type dockerSystemDFVerboseImage struct {
+	Repository string `json:"Repository"`
+	Tag        string `json:"Tag"`
+	CreatedAt  string `json:"CreatedAt"`
+	Size       string `json:"Size"`
+	UniqueSize string `json:"UniqueSize"`
+}
+
 func parseInspect(raw string) ([]ContainerInfo, error) {
 	var responses []inspectResponse
 	if err := json.Unmarshal([]byte(raw), &responses); err != nil {
@@ -554,6 +578,94 @@ func parseImageInspect(raw string) ([]ImageInfo, error) {
 		})
 	}
 	return infos, nil
+}
+
+func parseDockerSystemDFVerboseJSON(raw string) (map[string]ImageMetadata, error) {
+	var response dockerSystemDFVerboseResponse
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		return nil, fmt.Errorf("parse docker system df: %w", err)
+	}
+	metadata := make(map[string]ImageMetadata, len(response.Images))
+	for _, image := range response.Images {
+		repository := strings.TrimSpace(image.Repository)
+		tag := strings.TrimSpace(image.Tag)
+		if repository == "" || tag == "" || repository == "<none>" || tag == "<none>" {
+			continue
+		}
+		ref := repository + ":" + tag
+		createdAt, err := parseDockerSystemDFTime(image.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse docker system df created_at for %q: %w", ref, err)
+		}
+		totalSizeBytes, err := parseDockerByteSize(image.Size)
+		if err != nil {
+			return nil, fmt.Errorf("parse docker system df size for %q: %w", ref, err)
+		}
+		uniqueSizeBytes, err := parseDockerByteSize(image.UniqueSize)
+		if err != nil {
+			return nil, fmt.Errorf("parse docker system df unique_size for %q: %w", ref, err)
+		}
+		metadata[ref] = ImageMetadata{
+			Ref:             ref,
+			CreatedAt:       createdAt,
+			TotalSizeBytes:  totalSizeBytes,
+			UniqueSizeBytes: uniqueSizeBytes,
+		}
+	}
+	return metadata, nil
+}
+
+func parseDockerSystemDFTime(raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05 -0700 MST",
+		time.RFC3339,
+		time.RFC3339Nano,
+	} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time %q", raw)
+}
+
+func parseDockerByteSize(raw string) (int64, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, nil
+	}
+	units := []struct {
+		suffix     string
+		multiplier float64
+	}{
+		{suffix: "TB", multiplier: 1_000_000_000_000},
+		{suffix: "GB", multiplier: 1_000_000_000},
+		{suffix: "MB", multiplier: 1_000_000},
+		{suffix: "kB", multiplier: 1_000},
+		{suffix: "B", multiplier: 1},
+	}
+	for _, unit := range units {
+		if !strings.HasSuffix(value, unit.suffix) {
+			continue
+		}
+		number := strings.TrimSpace(strings.TrimSuffix(value, unit.suffix))
+		if number == "" {
+			return 0, fmt.Errorf("missing numeric component")
+		}
+		parsed, err := strconv.ParseFloat(number, 64)
+		if err != nil {
+			return 0, err
+		}
+		return int64(math.Round(parsed * unit.multiplier)), nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("unsupported size %q", raw)
+	}
+	return parsed, nil
 }
 
 func parseContainerState(raw string) ContainerState {

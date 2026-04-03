@@ -230,8 +230,11 @@ func TestRepoToolboxEnvironmentConfigLoads(t *testing.T) {
 	if environment.ImageRef() != "toolbox:latest" {
 		t.Fatalf("ImageRef() = %q, want toolbox:latest", environment.ImageRef())
 	}
-	if environment.DefaultEnv["NODE_PATH"] != "/opt/toolbox/node_modules" {
-		t.Fatalf("NODE_PATH = %q", environment.DefaultEnv["NODE_PATH"])
+	if environment.DefaultEnv["TOOLBOX_HOME"] != "/opt/toolbox" {
+		t.Fatalf("TOOLBOX_HOME = %q", environment.DefaultEnv["TOOLBOX_HOME"])
+	}
+	if _, ok := environment.DefaultEnv["NODE_PATH"]; ok {
+		t.Fatalf("NODE_PATH should be absent, got %q", environment.DefaultEnv["NODE_PATH"])
 	}
 	if strings.Contains(environment.DefaultEnv["PATH"], "/skills") {
 		t.Fatalf("PATH = %q, should not include /skills", environment.DefaultEnv["PATH"])

@@ -230,6 +230,61 @@ func TestCLIProviderInspectImageFallbackOnContainerdStore(t *testing.T) {
 	}
 }
 
+func TestCLIProviderListImageMetadata(t *testing.T) {
+	t.Parallel()
+
+	binary, _ := writeFakeRuntimeBinary(t)
+	provider := &CLIProvider{binary: binary}
+
+	metadata, err := provider.ListImageMetadata(context.Background())
+	if err != nil {
+		t.Fatalf("ListImageMetadata() error = %v", err)
+	}
+	got, ok := metadata["daily-office:latest"]
+	if !ok {
+		t.Fatalf("metadata[daily-office:latest] missing from %+v", metadata)
+	}
+	if got.TotalSizeBytes != 3050000000 {
+		t.Fatalf("TotalSizeBytes = %d, want %d", got.TotalSizeBytes, int64(3050000000))
+	}
+	if got.UniqueSizeBytes != 2881000000 {
+		t.Fatalf("UniqueSizeBytes = %d, want %d", got.UniqueSizeBytes, int64(2881000000))
+	}
+	expectedCreatedAt := time.Date(2026, time.March, 29, 10, 43, 57, 0, time.UTC)
+	if !got.CreatedAt.Equal(expectedCreatedAt) {
+		t.Fatalf("CreatedAt = %s, want %s", got.CreatedAt, expectedCreatedAt)
+	}
+}
+
+func TestParseDockerSystemDFVerboseJSON(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"Images":[{"Repository":"daily-office","Tag":"latest","CreatedAt":"2026-03-29 18:43:57 +0800 CST","Size":"3.05GB","UniqueSize":"2.881GB"},{"Repository":"toolbox","Tag":"latest","CreatedAt":"2026-04-02 22:25:53 +0800 CST","Size":"252MB","UniqueSize":"85.28MB"},{"Repository":"busybox","Tag":"latest","CreatedAt":"2024-09-26 21:31:42 +0000 UTC","Size":"8.192kB","UniqueSize":"0B"},{"Repository":"<none>","Tag":"<none>","CreatedAt":"2026-03-29 19:39:20 +0800 CST","Size":"6.16MB","UniqueSize":"1.925MB"}]}`
+
+	metadata, err := parseDockerSystemDFVerboseJSON(raw)
+	if err != nil {
+		t.Fatalf("parseDockerSystemDFVerboseJSON() error = %v", err)
+	}
+	if len(metadata) != 3 {
+		t.Fatalf("len(metadata) = %d, want 3", len(metadata))
+	}
+	if _, ok := metadata["<none>:<none>"]; ok {
+		t.Fatalf("metadata should filter dangling images: %+v", metadata)
+	}
+	if metadata["toolbox:latest"].TotalSizeBytes != 252000000 {
+		t.Fatalf("toolbox TotalSizeBytes = %d", metadata["toolbox:latest"].TotalSizeBytes)
+	}
+	if metadata["toolbox:latest"].UniqueSizeBytes != 85280000 {
+		t.Fatalf("toolbox UniqueSizeBytes = %d", metadata["toolbox:latest"].UniqueSizeBytes)
+	}
+	if metadata["busybox:latest"].TotalSizeBytes != 8192 {
+		t.Fatalf("busybox TotalSizeBytes = %d", metadata["busybox:latest"].TotalSizeBytes)
+	}
+	if metadata["busybox:latest"].UniqueSizeBytes != 0 {
+		t.Fatalf("busybox UniqueSizeBytes = %d", metadata["busybox:latest"].UniqueSizeBytes)
+	}
+}
+
 func TestClassifyImageNotFoundMessage(t *testing.T) {
 	t.Parallel()
 
@@ -330,7 +385,7 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 
 	tempDir := t.TempDir()
 	logPath := filepath.Join(tempDir, "calls.log")
-	scriptPath := filepath.Join(tempDir, "fake-runtime.sh")
+	scriptPath := filepath.Join(tempDir, "docker")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> \"" + logPath + "\"\n" +
 		"case \"$1\" in\n" +
@@ -391,6 +446,15 @@ func writeFakeRuntimeBinary(t *testing.T) (string, string) {
 		"    fi\n" +
 		"    ;;\n" +
 		"  esac\n" +
+		"  ;;\n" +
+		"system)\n" +
+		"  if [ \"$2\" = 'df' ]; then\n" +
+		"    if [ -n \"$FAKE_RUNTIME_SYSTEM_DF_OUTPUT\" ]; then\n" +
+		"      printf '%s\\n' \"$FAKE_RUNTIME_SYSTEM_DF_OUTPUT\"\n" +
+		"    else\n" +
+		"      printf '{\"Images\":[{\"Repository\":\"daily-office\",\"Tag\":\"latest\",\"CreatedAt\":\"2026-03-29 18:43:57 +0800 CST\",\"Size\":\"3.05GB\",\"UniqueSize\":\"2.881GB\"},{\"Repository\":\"<none>\",\"Tag\":\"<none>\",\"CreatedAt\":\"2026-03-29 19:39:20 +0800 CST\",\"Size\":\"6.16MB\",\"UniqueSize\":\"1.925MB\"}]}'\n" +
+		"    fi\n" +
+		"  fi\n" +
 		"  ;;\n" +
 		"exec)\n" +
 		"  printf '%s' \"$FAKE_RUNTIME_EXEC_STDOUT\"\n" +

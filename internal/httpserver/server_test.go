@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -438,6 +439,102 @@ func TestEnvironmentResponseIncludesAvailability(t *testing.T) {
 	}, http.StatusOK, "")
 	if missingEnv.Available {
 		t.Fatal("missing-shell available = true, want false")
+	}
+}
+
+func TestEnvironmentResponseIncludesImageMetadata(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	fake.allowUnknownImages = false
+	fake.inspectImageErr = errors.New("inspect should not be called")
+	fake.imageMetadata["busybox:latest"] = runtime.ImageMetadata{
+		Ref:             "busybox:latest",
+		CreatedAt:       time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC),
+		TotalSizeBytes:  252000000,
+		UniqueSizeBytes: 85280000,
+	}
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "available-shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "missing-shell",
+		ImageRepository: "missing-shell",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	got := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/available-shell", nil, http.StatusOK, "")
+	if got.ImageMetadata == nil {
+		t.Fatal("GET image_metadata = nil, want metadata")
+	}
+	if got.ImageMetadata.TotalSizeBytes == nil || *got.ImageMetadata.TotalSizeBytes != 252000000 {
+		t.Fatalf("GET total_size_bytes = %+v", got.ImageMetadata.TotalSizeBytes)
+	}
+	if got.ImageMetadata.UniqueSizeBytes == nil || *got.ImageMetadata.UniqueSizeBytes != 85280000 {
+		t.Fatalf("GET unique_size_bytes = %+v", got.ImageMetadata.UniqueSizeBytes)
+	}
+
+	listed := doJSON[[]api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments", nil, http.StatusOK, "")
+	byName := make(map[string]api.EnvironmentResponse, len(listed))
+	for _, item := range listed {
+		byName[item.Name] = item
+	}
+	if byName["available-shell"].ImageMetadata == nil {
+		t.Fatal("list image_metadata = nil, want metadata")
+	}
+	if byName["missing-shell"].Available {
+		t.Fatal("missing-shell available = true, want false")
+	}
+	if byName["missing-shell"].ImageMetadata != nil {
+		t.Fatalf("missing-shell image_metadata = %+v, want nil", byName["missing-shell"].ImageMetadata)
+	}
+}
+
+func TestEnvironmentResponseFallsBackWhenImageMetadataUnavailable(t *testing.T) {
+	t.Parallel()
+
+	handler, _, fake := newTestHandlerWithRuntime(t, "")
+	fake.allowUnknownImages = false
+	fake.listImageMetadataErr = errors.New("metadata unavailable")
+	fake.images["busybox:latest"] = runtime.ImageInfo{
+		ID:        "sha256:busybox",
+		Ref:       "busybox:latest",
+		CreatedAt: time.Date(2026, time.March, 17, 12, 38, 34, 0, time.UTC),
+	}
+
+	_ = doJSON[api.EnvironmentResponse](t, handler, http.MethodPost, "/api/environments", api.UpsertEnvironmentRequest{
+		Name:            "available-shell",
+		ImageRepository: "busybox",
+		ImageTag:        "latest",
+		Enabled:         true,
+		Build: model.BuildSpec{
+			Dockerfile: "FROM busybox:latest\n",
+		},
+	}, http.StatusOK, "")
+
+	got := doJSON[api.EnvironmentResponse](t, handler, http.MethodGet, "/api/environments/available-shell", nil, http.StatusOK, "")
+	if !got.Available {
+		t.Fatal("available-shell available = false, want true")
+	}
+	if got.ImageMetadata == nil {
+		t.Fatal("fallback image_metadata = nil, want created_at-only metadata")
+	}
+	if got.ImageMetadata.CreatedAt.IsZero() {
+		t.Fatal("fallback created_at = zero, want non-zero")
+	}
+	if got.ImageMetadata.TotalSizeBytes != nil || got.ImageMetadata.UniqueSizeBytes != nil {
+		t.Fatalf("fallback size fields = %+v, want nil", got.ImageMetadata)
 	}
 }
 
@@ -1337,6 +1434,7 @@ func newHandlerForConfigWithRuntimeAndOptions(t *testing.T, cfg config.Config, o
 	fake := &httpFakeRuntime{
 		containers:         make(map[string]runtime.ContainerInfo),
 		images:             make(map[string]runtime.ImageInfo),
+		imageMetadata:      make(map[string]runtime.ImageMetadata),
 		allowUnknownImages: true,
 		execResult: runtime.ExecResult{
 			ExitCode:   0,
@@ -1369,14 +1467,17 @@ func repoRootFromPackageDir() (string, error) {
 }
 
 type httpFakeRuntime struct {
-	containers         map[string]runtime.ContainerInfo
-	images             map[string]runtime.ImageInfo
-	allowUnknownImages bool
-	execResult         runtime.ExecResult
-	buildResult        runtime.BuildResult
-	buildStarted       chan struct{}
-	buildContinue      chan struct{}
-	createErr          error
+	containers           map[string]runtime.ContainerInfo
+	images               map[string]runtime.ImageInfo
+	imageMetadata        map[string]runtime.ImageMetadata
+	allowUnknownImages   bool
+	execResult           runtime.ExecResult
+	buildResult          runtime.BuildResult
+	buildStarted         chan struct{}
+	buildContinue        chan struct{}
+	createErr            error
+	inspectImageErr      error
+	listImageMetadataErr error
 }
 
 func (f *httpFakeRuntime) Name() string { return "fake" }
@@ -1462,6 +1563,9 @@ func (f *httpFakeRuntime) Inspect(_ context.Context, containerID string) (runtim
 }
 
 func (f *httpFakeRuntime) InspectImage(_ context.Context, imageRef string) (runtime.ImageInfo, error) {
+	if f.inspectImageErr != nil {
+		return runtime.ImageInfo{}, f.inspectImageErr
+	}
 	info, ok := f.images[imageRef]
 	if !ok {
 		if f.allowUnknownImages {
@@ -1474,6 +1578,20 @@ func (f *httpFakeRuntime) InspectImage(_ context.Context, imageRef string) (runt
 		return runtime.ImageInfo{}, runtime.ErrImageNotFound
 	}
 	return info, nil
+}
+
+func (f *httpFakeRuntime) ListImageMetadata(_ context.Context) (map[string]runtime.ImageMetadata, error) {
+	if f.listImageMetadataErr != nil {
+		return nil, f.listImageMetadataErr
+	}
+	if len(f.imageMetadata) == 0 {
+		return nil, nil
+	}
+	cloned := make(map[string]runtime.ImageMetadata, len(f.imageMetadata))
+	for ref, metadata := range f.imageMetadata {
+		cloned[ref] = metadata
+	}
+	return cloned, nil
 }
 
 func (f *httpFakeRuntime) ListByLabel(_ context.Context, key, value string) ([]runtime.ContainerInfo, error) {

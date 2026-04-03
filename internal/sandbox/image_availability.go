@@ -16,19 +16,24 @@ type imageInspector interface {
 }
 
 const (
-	imageInspectMaxAttempts = 3
-	imageInspectBackoff1    = 150 * time.Millisecond
-	imageInspectBackoff2    = 300 * time.Millisecond
+	imageInspectMaxAttempts   = 3
+	imageInspectBackoff1      = 150 * time.Millisecond
+	imageInspectBackoff2      = 300 * time.Millisecond
 	imageInspectDetachTimeout = 5 * time.Second
 )
 
 func inspectLocalImageAvailability(ctx context.Context, inspector imageInspector, imageRef string, logger *slog.Logger) (bool, error) {
+	_, available, err := inspectLocalImage(ctx, inspector, imageRef, logger)
+	return available, err
+}
+
+func inspectLocalImage(ctx context.Context, inspector imageInspector, imageRef string, logger *slog.Logger) (runtime.ImageInfo, bool, error) {
 	imageRef = strings.TrimSpace(imageRef)
 	if imageRef == "" {
-		return false, nil
+		return runtime.ImageInfo{}, false, nil
 	}
 	if inspector == nil {
-		return false, fmt.Errorf("image inspector is required")
+		return runtime.ImageInfo{}, false, fmt.Errorf("image inspector is required")
 	}
 
 	backoffs := []time.Duration{imageInspectBackoff1, imageInspectBackoff2}
@@ -42,12 +47,12 @@ func inspectLocalImageAvailability(ctx context.Context, inspector imageInspector
 			inspectCtx = detached
 		}
 
-		_, err := inspector.InspectImage(inspectCtx, imageRef)
+		info, err := inspector.InspectImage(inspectCtx, imageRef)
 		if err == nil {
-			return true, nil
+			return info, true, nil
 		}
 		if errors.Is(err, runtime.ErrImageNotFound) {
-			return false, nil
+			return runtime.ImageInfo{}, false, nil
 		}
 
 		lastErr = err
@@ -70,5 +75,5 @@ func inspectLocalImageAvailability(ctx context.Context, inspector imageInspector
 			"error", lastErr,
 		)
 	}
-	return false, lastErr
+	return runtime.ImageInfo{}, false, lastErr
 }

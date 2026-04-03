@@ -15,10 +15,8 @@ ARG MOCK_DOWNLOAD_URL=""
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    NPM_CONFIG_UPDATE_NOTIFIER=false \
     TOOLBOX_HOME=/opt/toolbox \
-    NODE_PATH=/opt/toolbox/node_modules \
-    PATH=/opt/toolbox/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -69,35 +67,10 @@ RUN set -euo pipefail; \
         ca-certificates \
         coreutils \
         curl \
-        dnsutils \
-        file \
-        findutils \
-        gawk \
-        git \
-        grep \
-        gzip \
         jq \
-        less \
-        make \
-        nano \
-        netcat-openbsd \
-        nodejs \
-        npm \
-        procps \
-        psmisc \
-        rsync \
         sed \
         tar \
-        tree \
-        unzip \
-        vim-tiny \
-        wget \
-        which \
-        xz-utils \
-        zip \
     && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p "${TOOLBOX_HOME}/node_modules"
 
 RUN set -euo pipefail; \
     arch="$(dpkg --print-architecture)"; \
@@ -122,12 +95,8 @@ RUN set -euo pipefail; \
         archive="${tmpdir}/$(basename "${asset_url%%\?*}")"; \
         curl -fsSL "${asset_url}" -o "${archive}"; \
         mkdir -p "${tmpdir}/unpacked"; \
-        case "${archive}" in \
-            *.zip) unzip -q "${archive}" -d "${tmpdir}/unpacked" ;; \
-            *.tgz|*.tar.gz) tar -xf "${archive}" -C "${tmpdir}/unpacked" ;; \
-            *) echo "Unsupported archive format for ${cli_name}: ${archive}" >&2; exit 1 ;; \
-        esac; \
-        bin_path="$(find "${tmpdir}/unpacked" -type f -name "${cli_name}" -perm -111 | head -n 1)"; \
+        CLI_NAME="${cli_name}" ARCHIVE_PATH="${archive}" EXTRACT_DIR="${tmpdir}/unpacked" python -c 'import os, pathlib, shutil, tarfile, zipfile; archive = pathlib.Path(os.environ["ARCHIVE_PATH"]); extract_dir = pathlib.Path(os.environ["EXTRACT_DIR"]); cli_name = os.environ["CLI_NAME"]; name = archive.name.lower(); handler = "zip" if name.endswith(".zip") else "tar" if name.endswith((".tgz", ".tar.gz")) else None; assert handler, f"Unsupported archive format for {cli_name}: {archive}"; zf = zipfile.ZipFile(archive) if handler == "zip" else None; tf = tarfile.open(archive) if handler == "tar" else None; zf.extractall(extract_dir) if zf else None; tf.extractall(extract_dir, filter="fully_trusted") if tf else None; zf.close() if zf else None; tf.close() if tf else None; matches = [path for path in extract_dir.rglob(cli_name) if path.is_file() and os.access(path, os.X_OK)]; assert matches, f"Failed to locate the {cli_name} binary in {archive}"; shutil.copy2(matches[0], extract_dir / ".selected-binary")'; \
+        bin_path="${tmpdir}/unpacked/.selected-binary"; \
         if [[ -z "${bin_path}" ]]; then \
             echo "Failed to locate the ${cli_name} binary in ${archive}" >&2; \
             exit 1; \

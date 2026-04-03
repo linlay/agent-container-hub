@@ -180,13 +180,66 @@ function availabilityClass(item) {
   return item?.available ? "" : "stopped";
 }
 
+function formatImageTimestamp(value) {
+  if (!value) {
+    return "-";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(parsed);
+}
+
+function formatBytes(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return "-";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = parsed;
+  let index = 0;
+  while (size >= 1000 && index < units.length - 1) {
+    size /= 1000;
+    index += 1;
+  }
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[index]}`;
+}
+
+function imageMetadataLabel(item) {
+  return {
+    createdAt: formatImageTimestamp(item?.image_metadata?.created_at),
+    totalSize: formatBytes(item?.image_metadata?.total_size_bytes),
+    uniqueSize: formatBytes(item?.image_metadata?.unique_size_bytes),
+  };
+}
+
 function environmentStatusSummary(item) {
   const enabledLabel = item?.enabled ? "enabled" : "disabled";
   const availabilityLabel = item?.available ? "image available locally" : "image missing locally";
+  const metadata = imageMetadataLabel(item);
+  const lines = [
+    `镜像: ${item?.image_ref || "-"}`,
+    `状态: ${enabledLabel} · ${availabilityLabel}`,
+    `打包时间: ${metadata.createdAt}`,
+    `传输大小: ${metadata.totalSize}`,
+    `磁盘大小: ${metadata.uniqueSize}`,
+  ];
   if (item?.last_build) {
-    return `Last build ${formatBuildStatus(item.last_build.status)}${buildTargetSuffix(item.last_build.target)} at ${item.last_build.started_at || "-"} · ${enabledLabel} · ${availabilityLabel}.`;
+    lines.unshift(`最近构建: ${formatBuildStatus(item.last_build.status)}${buildTargetSuffix(item.last_build.target)} @ ${formatImageTimestamp(item.last_build.started_at)}`);
+  } else {
+    lines.unshift("最近构建: 暂无");
   }
-  return `Environment loaded. ${enabledLabel}. ${availabilityLabel}.`;
+  return lines.join("\n");
 }
 
 function normalizeBuildTargets(targets) {
@@ -318,6 +371,8 @@ function renderEnvironments() {
       <div class="meta">${escapeHTML(item.image_ref || "-")}</div>
       <div class="meta">${item.last_build ? `last build: ${escapeHTML(formatBuildStatus(item.last_build.status))}` : "no build yet"}</div>
       <div class="meta">${item.available ? "image available locally" : "image missing locally"}</div>
+      <div class="meta">打包时间: ${escapeHTML(imageMetadataLabel(item).createdAt)}</div>
+      <div class="meta">传输大小: ${escapeHTML(imageMetadataLabel(item).totalSize)} · 磁盘大小: ${escapeHTML(imageMetadataLabel(item).uniqueSize)}</div>
     </div>
   `).join("") || `<div class="empty">No environments yet.</div>`;
 

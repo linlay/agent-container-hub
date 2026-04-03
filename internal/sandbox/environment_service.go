@@ -8,8 +8,13 @@ import (
 
 	"agent-container-hub/internal/api"
 	"agent-container-hub/internal/model"
+	"agent-container-hub/internal/runtime"
 	"agent-container-hub/internal/store"
 )
+
+type imageMetadataProvider interface {
+	ListImageMetadata(context.Context) (map[string]runtime.ImageMetadata, error)
+}
 
 type EnvironmentService struct {
 	environments store.EnvironmentStore
@@ -77,7 +82,8 @@ func (s *EnvironmentService) Upsert(ctx context.Context, req api.UpsertEnvironme
 		return nil, err
 	}
 	s.logger.Info("environment upserted", "environment", environment.Name, "image", environment.ImageRef())
-	return s.toResponse(ctx, stored, true)
+	imageMetadata, loaded := s.loadImageMetadata(ctx)
+	return s.toResponse(ctx, stored, true, imageMetadata, loaded)
 }
 
 func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.EnvironmentResponse, error) {
@@ -88,7 +94,8 @@ func (s *EnvironmentService) Get(ctx context.Context, name string) (*api.Environ
 	if err != nil {
 		return nil, err
 	}
-	return s.toResponse(ctx, environment, true)
+	imageMetadata, loaded := s.loadImageMetadata(ctx)
+	return s.toResponse(ctx, environment, true, imageMetadata, loaded)
 }
 
 func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentResponse, error) {
@@ -96,9 +103,10 @@ func (s *EnvironmentService) List(ctx context.Context) ([]*api.EnvironmentRespon
 	if err != nil {
 		return nil, err
 	}
+	imageMetadata, loaded := s.loadImageMetadata(ctx)
 	responses := make([]*api.EnvironmentResponse, 0, len(environments))
 	for _, environment := range environments {
-		response, err := s.toResponse(ctx, environment, false)
+		response, err := s.toResponse(ctx, environment, false, imageMetadata, loaded)
 		if err != nil {
 			s.logger.Warn("environment toResponse failed, using degraded response",
 				"environment", environment.Name,
@@ -181,7 +189,7 @@ func (s *EnvironmentService) PutFile(ctx context.Context, name, relPath, content
 	return s.GetFile(ctx, name, relPath)
 }
 
-func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.Environment, includeYAML bool) (*api.EnvironmentResponse, error) {
+func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.Environment, includeYAML bool, imageMetadata map[string]runtime.ImageMetadata, imageMetadataLoaded bool) (*api.EnvironmentResponse, error) {
 	response := &api.EnvironmentResponse{
 		Name:            environment.Name,
 		Description:     environment.Description,
@@ -199,11 +207,26 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		CreatedAt:       environment.CreatedAt,
 		UpdatedAt:       environment.UpdatedAt,
 	}
-	available, err := inspectLocalImageAvailability(ctx, s.runtime, environment.ImageRef(), s.logger)
-	if err != nil {
-		return nil, err
+	if imageMetadataLoaded {
+		if metadata, ok := imageMetadata[response.ImageRef]; ok {
+			response.Available = true
+			response.ImageMetadata = imageMetadataToResponse(metadata)
+		} else {
+			response.Available = false
+		}
+	} else {
+		info, available, err := inspectLocalImage(ctx, s.runtime, environment.ImageRef(), s.logger)
+		if err != nil {
+			return nil, err
+		}
+		response.Available = available
+		if available {
+			response.ImageMetadata = imageMetadataToResponse(runtime.ImageMetadata{
+				Ref:       info.Ref,
+				CreatedAt: info.CreatedAt,
+			})
+		}
 	}
-	response.Available = available
 	availableTargets, err := AvailableBuildTargets(s.configRoot, environment.Name)
 	if err != nil {
 		return nil, err
@@ -224,6 +247,40 @@ func (s *EnvironmentService) toResponse(ctx context.Context, environment *model.
 		response.YAML = string(payload.Content)
 	}
 	return response, nil
+}
+
+func (s *EnvironmentService) loadImageMetadata(ctx context.Context) (map[string]runtime.ImageMetadata, bool) {
+	provider, ok := s.runtime.(imageMetadataProvider)
+	if !ok {
+		return nil, false
+	}
+	metadata, err := provider.ListImageMetadata(ctx)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("list image metadata failed, falling back to inspect", "error", err)
+		}
+		return nil, false
+	}
+	if metadata == nil {
+		return nil, false
+	}
+	return metadata, true
+}
+
+func imageMetadataToResponse(metadata runtime.ImageMetadata) *api.ImageMetadataResponse {
+	if metadata.CreatedAt.IsZero() && metadata.TotalSizeBytes == 0 && metadata.UniqueSizeBytes == 0 {
+		return nil
+	}
+	response := &api.ImageMetadataResponse{
+		CreatedAt: metadata.CreatedAt,
+	}
+	if metadata.TotalSizeBytes > 0 {
+		response.TotalSizeBytes = &metadata.TotalSizeBytes
+	}
+	if metadata.UniqueSizeBytes > 0 {
+		response.UniqueSizeBytes = &metadata.UniqueSizeBytes
+	}
+	return response
 }
 
 func (s *EnvironmentService) toResponseDegraded(environment *model.Environment) *api.EnvironmentResponse {

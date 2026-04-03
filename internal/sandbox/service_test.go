@@ -1157,7 +1157,7 @@ func TestToolboxSessionUsesDefaultEnvWithoutSkillsPath(t *testing.T) {
 	services, cleanup, fake := newTestServices(t)
 	defer cleanup()
 
-	expectedPath := "/opt/toolbox/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	expectedPath := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	if _, err := services.environments.Upsert(context.Background(), api.UpsertEnvironmentRequest{
 		Name:            "toolbox",
 		ImageRepository: "toolbox",
@@ -1165,7 +1165,6 @@ func TestToolboxSessionUsesDefaultEnvWithoutSkillsPath(t *testing.T) {
 		DefaultCwd:      runtime.DefaultMountPath,
 		DefaultEnv: map[string]string{
 			"TOOLBOX_HOME": "/opt/toolbox",
-			"NODE_PATH":    "/opt/toolbox/node_modules",
 			"PATH":         expectedPath,
 		},
 		Enabled: true,
@@ -1187,8 +1186,8 @@ func TestToolboxSessionUsesDefaultEnvWithoutSkillsPath(t *testing.T) {
 	if fake.lastCreate.Env["TOOLBOX_HOME"] != "/opt/toolbox" {
 		t.Fatalf("TOOLBOX_HOME = %q", fake.lastCreate.Env["TOOLBOX_HOME"])
 	}
-	if fake.lastCreate.Env["NODE_PATH"] != "/opt/toolbox/node_modules" {
-		t.Fatalf("NODE_PATH = %q", fake.lastCreate.Env["NODE_PATH"])
+	if _, ok := fake.lastCreate.Env["NODE_PATH"]; ok {
+		t.Fatalf("NODE_PATH should be absent, got %q", fake.lastCreate.Env["NODE_PATH"])
 	}
 	if fake.lastCreate.Env["PATH"] != expectedPath {
 		t.Fatalf("PATH = %q", fake.lastCreate.Env["PATH"])
@@ -2348,6 +2347,7 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 	fake := &fakeRuntime{
 		containers:         make(map[string]runtime.ContainerInfo),
 		images:             make(map[string]runtime.ImageInfo),
+		imageMetadata:      make(map[string]runtime.ImageMetadata),
 		allowUnknownImages: true,
 	}
 	if logger == nil {
@@ -2364,27 +2364,29 @@ func newTestServicesWithLogger(t *testing.T, configure func(*config.Config), log
 }
 
 type fakeRuntime struct {
-	mu                 sync.Mutex
-	containers         map[string]runtime.ContainerInfo
-	images             map[string]runtime.ImageInfo
-	allowUnknownImages bool
-	createErr          error
-	execResult         runtime.ExecResult
-	execErr            error
-	startErr           error
-	stopErr            error
-	removeErr          error
-	inspectErr         error
-	inspectImageErr    error
-	lastCreate         runtime.CreateOptions
-	lastExec           runtime.ExecOptions
-	startCalls         int
-	lastBuild          runtime.BuildOptions
-	buildResult        runtime.BuildResult
-	buildFiles         map[string]string
-	buildErr           error
-	buildStarted       chan struct{}
-	buildContinue      chan struct{}
+	mu                   sync.Mutex
+	containers           map[string]runtime.ContainerInfo
+	images               map[string]runtime.ImageInfo
+	imageMetadata        map[string]runtime.ImageMetadata
+	allowUnknownImages   bool
+	createErr            error
+	execResult           runtime.ExecResult
+	execErr              error
+	startErr             error
+	stopErr              error
+	removeErr            error
+	inspectErr           error
+	inspectImageErr      error
+	listImageMetadataErr error
+	lastCreate           runtime.CreateOptions
+	lastExec             runtime.ExecOptions
+	startCalls           int
+	lastBuild            runtime.BuildOptions
+	buildResult          runtime.BuildResult
+	buildFiles           map[string]string
+	buildErr             error
+	buildStarted         chan struct{}
+	buildContinue        chan struct{}
 }
 
 func (f *fakeRuntime) Name() string { return "fake" }
@@ -2552,6 +2554,22 @@ func (f *fakeRuntime) InspectImage(_ context.Context, imageRef string) (runtime.
 		return runtime.ImageInfo{}, runtime.ErrImageNotFound
 	}
 	return info, nil
+}
+
+func (f *fakeRuntime) ListImageMetadata(_ context.Context) (map[string]runtime.ImageMetadata, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listImageMetadataErr != nil {
+		return nil, f.listImageMetadataErr
+	}
+	if len(f.imageMetadata) == 0 {
+		return nil, nil
+	}
+	cloned := make(map[string]runtime.ImageMetadata, len(f.imageMetadata))
+	for ref, metadata := range f.imageMetadata {
+		cloned[ref] = metadata
+	}
+	return cloned, nil
 }
 
 func (f *fakeRuntime) ListByLabel(_ context.Context, key, value string) ([]runtime.ContainerInfo, error) {
